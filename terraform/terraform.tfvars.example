@@ -1,0 +1,5 @@
+aws_region  = "us-east-1"
+vpc_id      = "vpc-078f4e15dadc5b2ee"
+domain_name = "example.com"
+key_name    = "my-key"
+admin_cidr  = "1.2.3.4/32"

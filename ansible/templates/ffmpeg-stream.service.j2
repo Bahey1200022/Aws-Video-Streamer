@@ -1,0 +1,19 @@
+[Unit]
+Description=Stream {{ video_file }} in a loop to the frontend RTMP server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/ffmpeg -nostdin -loglevel warning \
+  -stream_loop -1 \
+  -re \
+  -i {{ video_dir }}/{{ video_file }} \
+  -c:v libx264 \
+  -c:a aac \
+  -f flv \
+  rtmp://{{ frontend_private_ip }}:1935/live/stream
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

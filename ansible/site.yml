@@ -1,0 +1,167 @@
+- name: Web Frontend (nginx + RTMP, HLS/DASH, Let's Encrypt)
+  hosts: frontend
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Wait for SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    - name: Wait for cloud-init (NAT setup, apt locks)
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+
+    - name: Install packages
+      ansible.builtin.apt:
+        name: [nginx, libnginx-mod-rtmp, ffmpeg]
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create stream root folders for HLS and DASH chunks
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: "0755"
+      loop:
+        - /var/www/html/stream
+        - /var/www/html/stream/hls
+        - /var/www/html/stream/dash
+
+    - name: Install certbot with the Route 53 DNS plugin
+      ansible.builtin.apt:
+        name: [certbot, python3-certbot-dns-route53]
+      when: enable_tls | bool
+
+    - name: Request certificate (DNS-01 challenge through Route 53)
+      ansible.builtin.command: >
+        certbot certonly --dns-route53 -d {{ fqdn }}
+        --non-interactive --agree-tos --register-unsafely-without-email
+        {{ '--staging' if letsencrypt_staging | bool else '' }}
+      args:
+        creates: /etc/letsencrypt/live/{{ fqdn }}/fullchain.pem
+      when: enable_tls | bool
+
+    - name: Check for certificate
+      ansible.builtin.stat:
+        path: /etc/letsencrypt/live/{{ fqdn }}/fullchain.pem
+      register: cert
+
+    - name: Configure nginx (main config with RTMP ingest)
+      ansible.builtin.template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/nginx.conf
+        mode: "0644"
+      notify: Reload nginx
+
+    - name: Configure streamer site (serves HLS and DASH chunks)
+      ansible.builtin.template:
+        src: streamer.site.j2
+        dest: /etc/nginx/sites-available/streamer
+        mode: "0644"
+      vars:
+        tls_active: "{{ cert.stat.exists }}"
+      notify: Reload nginx
+
+    - name: Enable streamer site
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/streamer
+        dest: /etc/nginx/sites-enabled/streamer
+        state: link
+      notify: Reload nginx
+
+    - name: Disable default site (it would take port 80 as default_server)
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: Reload nginx
+
+    - name: Validate nginx configuration
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+    - name: Install player page
+      ansible.builtin.template:
+        src: index.html.j2
+        dest: /var/www/html/index.html
+        mode: "0644"
+
+    - name: Ensure nginx is running
+      ansible.builtin.service:
+        name: nginx
+        state: started
+        enabled: true
+
+  handlers:
+    - name: Reload nginx
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded
+
+- name: Video Streamer (ffmpeg loop to RTMP)
+  hosts: streamer
+  become: true
+  gather_facts: false
+  vars:
+    video_dir: /videos
+    video_file: BigBuckBunny_320x180.mp4
+    video_url: https://download.blender.org/peach/bigbuckbunny_movies/BigBuckBunny_320x180.mp4.zip
+  tasks:
+    - name: Wait for SSH (through the frontend)
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    - name: Wait for cloud-init
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+
+    - name: Install packages
+      ansible.builtin.apt:
+        name: [ffmpeg, unzip]
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create video folder
+      ansible.builtin.file:
+        path: "{{ video_dir }}"
+        state: directory
+        mode: "0755"
+
+    # download.blender.org returns 403 to AWS IPs, so fetch it on the
+    # control machine once and upload it from there
+    - name: Download sample video on the control machine
+      ansible.builtin.get_url:
+        url: "{{ video_url }}"
+        dest: "{{ playbook_dir }}/files/{{ video_file }}.zip"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Upload and unpack sample video
+      ansible.builtin.unarchive:
+        src: "{{ playbook_dir }}/files/{{ video_file }}.zip"
+        dest: "{{ video_dir }}"
+        creates: "{{ video_dir }}/{{ video_file }}"
+
+    - name: Install streaming service
+      ansible.builtin.template:
+        src: ffmpeg-stream.service.j2
+        dest: /etc/systemd/system/ffmpeg-stream.service
+        mode: "0644"
+      notify: Restart stream
+
+    - name: Start streaming service
+      ansible.builtin.systemd:
+        name: ffmpeg-stream
+        state: started
+        enabled: true
+        daemon_reload: true
+
+  handlers:
+    - name: Restart stream
+      ansible.builtin.systemd:
+        name: ffmpeg-stream
+        state: restarted
+        daemon_reload: true

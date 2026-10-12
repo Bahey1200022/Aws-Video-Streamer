@@ -1,0 +1,55 @@
+# {{ ansible_managed }}
+{% if tls_active %}
+server {
+    listen 80;
+    server_name {{ fqdn }};
+    return 301 https://$host$request_uri;
+}
+
+{% endif %}
+server {
+{% if tls_active %}
+    listen 443 ssl;
+    ssl_certificate /etc/letsencrypt/live/{{ fqdn }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ fqdn }}/privkey.pem;
+{% else %}
+    listen 80;
+{% endif %}
+    server_name {{ fqdn }};
+
+    # Player page
+    root /var/www/html;
+    index index.html;
+
+    location /hls {
+        add_header Access-Control-Allow-Origin *;
+        root /var/www/html/stream;
+    }
+
+    autoindex_localtime on;
+
+    location /dash {
+        # Disable cache
+        add_header 'Cache-Control' 'no-cache';
+
+        # CORS setup
+        add_header 'Access-Control-Allow-Origin' '*' always;
+        add_header 'Access-Control-Expose-Headers' 'Content-Length';
+
+        # Allow CORS preflight requests
+        if ($request_method = 'OPTIONS') {
+            add_header 'Access-Control-Allow-Origin' '*';
+            add_header 'Access-Control-Max-Age' 1728000;
+            add_header 'Content-Type' 'text/plain charset=UTF-8';
+            add_header 'Content-Length' 0;
+            return 204;
+        }
+
+        types {
+            application/dash+xml mpd;
+            video/mp4 mp4;
+        }
+
+        root /var/www/html/stream;
+    }
+}

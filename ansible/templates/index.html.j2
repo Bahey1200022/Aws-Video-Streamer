@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MSS Live Stream</title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+  <style>body{font-family:sans-serif;max-width:900px;margin:2em auto;padding:0 1em}video{width:100%;background:#000}</style>
+</head>
+<body>
+  <h1>Live stream</h1>
+  <video id="video" controls autoplay muted></video>
+  <p>HLS: <a href="/hls/stream.m3u8">/hls/stream.m3u8</a> &middot;
+     DASH: <a href="/dash/stream.mpd">/dash/stream.mpd</a></p>
+  <script>
+    const video = document.getElementById('video');
+    const src = '/hls/stream.m3u8';
+    if (Hls.isSupported()) {
+      const hls = new Hls();
+      hls.loadSource(src);
+      hls.attachMedia(video);
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = src;
+    }
+  </script>
+</body>
+</html>
