@@ -15,7 +15,7 @@ resource "local_file" "inventory" {
     private_cidr        = data.aws_subnet.private.cidr_block
     vpc_cidr            = data.aws_vpc.main.cidr_block
     frontend_private_ip = aws_instance.frontend.private_ip
-    frontend_public_ip  = aws_instance.frontend.public_ip
+    frontend_public_ip  = local.frontend_public_ip
     streamer_private_ip = aws_instance.streamer.private_ip
     enable_tls          = var.enable_tls && local.dns_enabled
     letsencrypt_staging = var.letsencrypt_staging
@@ -44,6 +44,7 @@ resource "terraform_data" "ansible" {
 
   depends_on = [
     aws_route_table_association.private, # streamer needs the NAT route to install packages
+    aws_ec2_instance_state.streamer,
     aws_route53_record.frontend,
   ]
 }

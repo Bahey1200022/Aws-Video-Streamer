@@ -40,6 +40,12 @@ resource "aws_instance" "frontend" {
   })
 
   tags = { Name = "mss-web-frontend" }
+
+  lifecycle {
+    # AWS reports false while the instance is stopped (no public IP); the
+    # interface still gets a new public IP when it starts again
+    ignore_changes = [associate_public_ip_address]
+  }
 }
 
 resource "aws_instance" "streamer" {
@@ -52,11 +58,31 @@ resource "aws_instance" "streamer" {
   tags = { Name = "mss-video-streamer" }
 }
 
+# The lab account stops all instances at midnight. Bring them back up on every
+# apply, then read the live instance so we get the new public IP.
+resource "aws_ec2_instance_state" "frontend" {
+  instance_id = aws_instance.frontend.id
+  state       = "running"
+}
+
+resource "aws_ec2_instance_state" "streamer" {
+  instance_id = aws_instance.streamer.id
+  state       = "running"
+}
+
+data "aws_instance" "frontend" {
+  instance_id = aws_ec2_instance_state.frontend.instance_id
+}
+
+locals {
+  frontend_public_ip = data.aws_instance.frontend.public_ip
+}
+
 resource "aws_route53_record" "frontend" {
   count   = local.dns_enabled ? 1 : 0
   zone_id = data.aws_route53_zone.main[0].zone_id
   name    = "${var.frontend_hostname}.${var.domain_name}"
   type    = "A"
   ttl     = 60
-  records = [aws_instance.frontend.public_ip]
+  records = [local.frontend_public_ip]
 }
