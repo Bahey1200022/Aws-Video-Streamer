@@ -4,6 +4,7 @@ locals {
   ansible_sources = sort(concat(
     ["site.yml", "ansible.cfg"],
     tolist(fileset(local.ansible_dir, "templates/*")),
+    tolist(fileset(local.ansible_dir, "group_vars/*")),
   ))
 }
 
@@ -19,6 +20,7 @@ resource "local_file" "inventory" {
     streamer_private_ip = aws_instance.streamer.private_ip
     enable_tls          = var.enable_tls && local.dns_enabled
     letsencrypt_staging = var.letsencrypt_staging
+    stream_key          = random_password.stream_key.result
   })
 }
 

@@ -1,5 +1,5 @@
-- name: Web Frontend (nginx + RTMP, HLS/DASH, Let's Encrypt)
-  hosts: frontend
+- name: WireGuard keys (both hosts)
+  hosts: all
   become: true
   gather_facts: false
   tasks:
@@ -11,11 +11,57 @@
       ansible.builtin.command: cloud-init status --wait
       changed_when: false
 
+    - name: Install WireGuard
+      ansible.builtin.apt:
+        name: wireguard-tools
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Generate private key on the host (kept if it already exists)
+      ansible.builtin.shell: umask 077 && wg genkey > /etc/wireguard/private.key
+      args:
+        creates: /etc/wireguard/private.key
+
+    - name: Derive public key
+      ansible.builtin.shell: wg pubkey < /etc/wireguard/private.key
+      register: wg_pub
+      changed_when: false
+
+    - name: Share public key with the other host
+      ansible.builtin.set_fact:
+        wg_public_key: "{{ wg_pub.stdout }}"
+
+- name: Web Frontend (nginx + RTMP, HLS/DASH, Let's Encrypt)
+  hosts: frontend
+  become: true
+  gather_facts: false
+  tasks:
     - name: Install packages
       ansible.builtin.apt:
         name: [nginx, libnginx-mod-rtmp, ffmpeg]
         update_cache: true
         cache_valid_time: 3600
+
+    - name: Configure WireGuard tunnel (listens for the streamer)
+      ansible.builtin.template:
+        src: wg0.conf.j2
+        dest: /etc/wireguard/wg0.conf
+        owner: root
+        group: root
+        mode: "0600"
+      vars:
+        wg_address: "{{ wg_frontend_ip }}"
+        wg_listen: true
+        wg_peer_public_key: "{{ hostvars['video-streamer'].wg_public_key }}"
+        wg_peer_ip: "{{ wg_streamer_ip }}"
+        wg_peer_endpoint: ""
+      notify: Restart WireGuard
+
+    - name: Start WireGuard tunnel
+      ansible.builtin.systemd:
+        name: wg-quick@wg0
+        state: started
+        enabled: true
 
     - name: Create stream root folders for HLS and DASH chunks
       ansible.builtin.file:
@@ -52,7 +98,9 @@
       ansible.builtin.template:
         src: nginx.conf.j2
         dest: /etc/nginx/nginx.conf
-        mode: "0644"
+        owner: root
+        group: root
+        mode: "0600" # contains the stream key
       notify: Reload nginx
 
     - name: Configure streamer site (serves HLS and DASH chunks)
@@ -94,6 +142,11 @@
         enabled: true
 
   handlers:
+    - name: Restart WireGuard
+      ansible.builtin.systemd:
+        name: wg-quick@wg0
+        state: restarted
+
     - name: Reload nginx
       ansible.builtin.service:
         name: nginx
@@ -108,14 +161,6 @@
     video_file: BigBuckBunny_320x180.mp4
     video_url: https://download.blender.org/peach/bigbuckbunny_movies/BigBuckBunny_320x180.mp4.zip
   tasks:
-    - name: Wait for SSH (through the frontend)
-      ansible.builtin.wait_for_connection:
-        timeout: 300
-
-    - name: Wait for cloud-init
-      ansible.builtin.command: cloud-init status --wait
-      changed_when: false
-
     - name: Install packages
       ansible.builtin.apt:
         name: [ffmpeg, unzip]
@@ -145,6 +190,38 @@
         dest: "{{ video_dir }}"
         creates: "{{ video_dir }}/{{ video_file }}"
 
+    - name: Configure WireGuard tunnel (connects to the frontend)
+      ansible.builtin.template:
+        src: wg0.conf.j2
+        dest: /etc/wireguard/wg0.conf
+        owner: root
+        group: root
+        mode: "0600"
+      vars:
+        wg_address: "{{ wg_streamer_ip }}"
+        wg_listen: false
+        wg_peer_public_key: "{{ hostvars['web-frontend'].wg_public_key }}"
+        wg_peer_ip: "{{ wg_frontend_ip }}"
+        wg_peer_endpoint: "{{ frontend_private_ip }}:{{ wg_port }}"
+      notify:
+        - Restart WireGuard
+        - Restart stream
+
+    - name: Start WireGuard tunnel
+      ansible.builtin.systemd:
+        name: wg-quick@wg0
+        state: started
+        enabled: true
+
+    - name: Install stream key (root-only)
+      ansible.builtin.template:
+        src: ffmpeg-stream.env.j2
+        dest: /etc/ffmpeg-stream.env
+        owner: root
+        group: root
+        mode: "0600"
+      notify: Restart stream
+
     - name: Install streaming service
       ansible.builtin.template:
         src: ffmpeg-stream.service.j2
@@ -160,6 +237,11 @@
         daemon_reload: true
 
   handlers:
+    - name: Restart WireGuard
+      ansible.builtin.systemd:
+        name: wg-quick@wg0
+        state: restarted
+
     - name: Restart stream
       ansible.builtin.systemd:
         name: ffmpeg-stream

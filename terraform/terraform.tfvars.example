@@ -1,5 +1,16 @@
-aws_region  = "us-east-1"
-vpc_id      = "vpc-078f4e15dadc5b2ee"
-domain_name = "example.com"
-key_name    = "my-key"
-admin_cidr  = "1.2.3.4/32"
+aws_region = "us-east-1"
+vpc_id     = "vpc-xxxxxxxxxxxxxxxxx"
+
+# Existing subnets, looked up by their Name tag
+# public_subnet_name  = "bahey-subnet-public"
+# private_subnet_name = "bahey-subnet-private"
+
+# Route 53 hosted zone + record for the frontend (omit domain_name to skip DNS)
+domain_name       = "devops.gin-telecom.ovh"
+frontend_hostname = "myname"
+
+# HTTPS via Let's Encrypt DNS-01 (needs the instance profile to allow writes to the zone)
+# enable_tls          = true
+# letsencrypt_staging = true   # untrusted test certs, no rate limits
+
+# admin_cidr = "1.2.3.4/32"    # SSH allow-list; auto-detected from this machine if omitted

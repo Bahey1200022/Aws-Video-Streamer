@@ -1,0 +1,17 @@
+# {{ ansible_managed }}
+[Interface]
+Address = {{ wg_address }}/32
+{% if wg_listen %}
+ListenPort = {{ wg_port }}
+{% endif %}
+# The private key never leaves this host: it is generated here and loaded
+# from disk, so it is not part of this file or of any Ansible variable
+PostUp = wg set %i private-key /etc/wireguard/private.key
+
+[Peer]
+PublicKey = {{ wg_peer_public_key }}
+AllowedIPs = {{ wg_peer_ip }}/32
+{% if wg_peer_endpoint %}
+Endpoint = {{ wg_peer_endpoint }}
+PersistentKeepalive = 25
+{% endif %}

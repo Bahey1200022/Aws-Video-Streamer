@@ -1,9 +1,11 @@
 [Unit]
 Description=Stream {{ video_file }} in a loop to the frontend RTMP server
-After=network-online.target
-Wants=network-online.target
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target wg-quick@wg0.service
 
 [Service]
+# Holds STREAM_KEY; root-only so the key is not in this world-readable unit
+EnvironmentFile=/etc/ffmpeg-stream.env
 ExecStart=/usr/bin/ffmpeg -nostdin -loglevel warning \
   -stream_loop -1 \
   -re \
@@ -11,7 +13,7 @@ ExecStart=/usr/bin/ffmpeg -nostdin -loglevel warning \
   -c:v libx264 \
   -c:a aac \
   -f flv \
-  rtmp://{{ frontend_private_ip }}:1935/live/stream
+  rtmp://{{ wg_frontend_ip }}:1935/live/stream?key=${STREAM_KEY}
 Restart=always
 RestartSec=5
 

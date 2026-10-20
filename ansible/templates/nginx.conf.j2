@@ -21,6 +21,33 @@ http {
 
     default_type    application/octet-stream;
 
+    # Publish authentication: nginx-rtmp asks this endpoint before accepting
+    # a stream. Only the stream "stream" with the right key is allowed.
+    map "$arg_name:$arg_key" $publish_allowed {
+        default                     0;
+        "stream:{{ stream_key }}"   1;
+    }
+
+    # Logs who tried to publish and the verdict - never the key itself
+    log_format publish_auth '$time_iso8601 addr=$arg_addr app=$arg_app '
+                            'name=$arg_name result=$status';
+
+    server {
+        listen 127.0.0.1:8081;
+        access_log /var/log/nginx/publish-auth.log publish_auth;
+
+        location = /auth/publish {
+            if ($publish_allowed) {
+                return 200;
+            }
+            return 403;
+        }
+
+        location / {
+            return 404;
+        }
+    }
+
     server {
         listen 8080;
 
@@ -32,6 +59,12 @@ http {
 }
 
 rtmp {
+    # The default RTMP log format records the connection arguments, which
+    # include the stream key - log everything except them
+    log_format rtmp_nokey '$remote_addr [$time_local] $command "$app" "$name" '
+                          '$bytes_received $bytes_sent ($session_readable_time)';
+    access_log /var/log/nginx/rtmp-access.log rtmp_nokey;
+
     server {
         listen 1935;
         chunk_size 4096;
@@ -40,9 +73,17 @@ rtmp {
             live on;
             record off;
 
-            allow publish 127.0.0.0/16;
-            allow publish {{ vpc_cidr }};
+            # Layer 1: network - only the streamer's WireGuard address (or
+            # localhost) may publish, so the stream can't arrive unencrypted
+            allow publish 127.0.0.1;
+            allow publish {{ wg_streamer_ip }};
             deny publish all;
+
+            # Layer 2: identity - the publisher must present the stream key
+            # (rtmp://host:1935/live/stream?key=...). GET puts the RTMP
+            # arguments in the query string so the http block can read them.
+            notify_method get;
+            on_publish http://127.0.0.1:8081/auth/publish;
 
             hls on;
             hls_path /var/www/html/stream/hls;

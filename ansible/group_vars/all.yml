@@ -1,0 +1,4 @@
+# WireGuard tunnel carrying the RTMP ingest (streamer -> frontend)
+wg_port: 51820
+wg_frontend_ip: 10.99.0.1
+wg_streamer_ip: 10.99.0.2
