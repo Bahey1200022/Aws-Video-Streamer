@@ -1,26 +1,286 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MSS Live Stream</title>
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
-  <style>body{font-family:sans-serif;max-width:900px;margin:2em auto;padding:0 1em}video{width:100%;background:#000}</style>
+  <!-- Pinned versions + Subresource Integrity: the browser refuses a tampered CDN copy -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"
+          integrity="sha384-w6Gb3fXHb5e1LUYa/hYA5Q41bEDglN5ZPCG7Jvnoo8/X90oGnlPqBlBJCe38mEMm"
+          crossorigin="anonymous"></script>
+  <style>
+    :root {
+      --bg: #0b0f17; --panel: #131a26; --line: #222c3d; --text: #e6ebf3;
+      --muted: #8a97ab; --accent: #4f8cff; --live: #ff3b4e; --ok: #2ecc8f; --warn: #f5b942;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+
+    header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    h1 { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: .2px; }
+    h1 small { display: block; font-size: 13px; font-weight: 400; color: var(--muted); }
+
+    .badge {
+      display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
+      font-size: 13px; font-weight: 600; letter-spacing: .5px; background: var(--panel); border: 1px solid var(--line);
+    }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+    .badge.live { color: #fff; background: var(--live); border-color: var(--live); }
+    .badge.live .dot { background: #fff; animation: pulse 1.4s infinite; }
+    .badge.wait .dot { background: var(--warn); }
+    @keyframes pulse { 50% { opacity: .25; } }
+
+    .grid { display: grid; grid-template-columns: 1fr 300px; gap: 20px; margin-top: 20px; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+    .player { position: relative; background: #000; border-radius: 12px; overflow: hidden;
+              border: 1px solid var(--line); aspect-ratio: 16 / 9; }
+    video { width: 100%; height: 100%; display: block; background: #000; }
+    .overlay {
+      position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 10px; background: rgba(5, 8, 13, .82); color: var(--muted); text-align: center; padding: 16px;
+    }
+    .overlay[hidden] { display: none; }
+    .spinner { width: 34px; height: 34px; border: 3px solid var(--line); border-top-color: var(--accent);
+               border-radius: 50%; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .toolbar { display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+    .seg { display: inline-flex; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 3px; }
+    .seg button {
+      border: 0; background: transparent; color: var(--muted); padding: 6px 14px; border-radius: 6px;
+      font: inherit; font-weight: 600; cursor: pointer;
+    }
+    .seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+    .seg button:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .btn {
+      background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+      padding: 7px 12px; font: inherit; cursor: pointer;
+    }
+    .btn:hover { border-color: var(--accent); }
+    .spacer { flex: 1; }
+    .links a { color: var(--muted); font-size: 13px; margin-left: 12px; }
+
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+    .card h2 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+    .stats { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; margin: 0; }
+    .stats dt { color: var(--muted); }
+    .stats dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+    .card + .card { margin-top: 20px; }
+
+    .pipeline { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
+    .pipeline li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: #0f1520; }
+    .pipeline li::before { content: "→"; color: var(--accent); font-weight: 700; }
+    .pipeline li:first-child::before { content: "●"; color: var(--ok); }
+    .pipeline .lock { margin-left: auto; color: var(--ok); font-size: 12px; white-space: nowrap; }
+
+    footer { margin-top: 28px; color: var(--muted); font-size: 12px; text-align: center; }
+  </style>
 </head>
 <body>
-  <h1>Live stream</h1>
-  <video id="video" controls autoplay muted></video>
-  <p>HLS: <a href="/hls/stream.m3u8">/hls/stream.m3u8</a> &middot;
-     DASH: <a href="/dash/stream.mpd">/dash/stream.mpd</a></p>
-  <script>
-    const video = document.getElementById('video');
-    const src = '/hls/stream.m3u8';
-    if (Hls.isSupported()) {
-      const hls = new Hls();
-      hls.loadSource(src);
+<div class="wrap">
+  <header>
+    <h1>Big Buck Bunny, live <small>{{ fqdn if fqdn != '_' else 'MSS streaming platform' }}</small></h1>
+    <span id="badge" class="badge wait"><span class="dot"></span><span id="badge-text">CONNECTING</span></span>
+  </header>
+
+  <div class="grid">
+    <main>
+      <div class="player">
+        <video id="video" controls autoplay muted playsinline></video>
+        <div id="overlay" class="overlay">
+          <div class="spinner"></div>
+          <div id="overlay-text">Connecting to the live stream…</div>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <div class="seg" role="group" aria-label="Streaming format">
+          <button id="btn-hls" aria-pressed="true">HLS</button>
+          <button id="btn-dash" aria-pressed="false">DASH</button>
+        </div>
+        <button id="btn-live" class="btn" title="Jump to the live edge">Go live</button>
+        <span class="spacer"></span>
+        <span class="links">
+          <a href="/hls/stream.m3u8">stream.m3u8</a>
+          <a href="/dash/stream.mpd">stream.mpd</a>
+        </span>
+      </div>
+    </main>
+
+    <aside>
+      <section class="card">
+        <h2>Playback</h2>
+        <dl class="stats">
+          <dt>Format</dt>       <dd id="s-format">HLS</dd>
+          <dt>Status</dt>       <dd id="s-status">–</dd>
+          <dt>Resolution</dt>   <dd id="s-res">–</dd>
+          <dt>Latency</dt>      <dd id="s-lat">–</dd>
+          <dt>Buffer</dt>       <dd id="s-buf">–</dd>
+          <dt>Dropped frames</dt><dd id="s-drop">–</dd>
+        </dl>
+      </section>
+
+      <section class="card">
+        <h2>Pipeline</h2>
+        <ul class="pipeline">
+          <li>ffmpeg on the Video Streamer</li>
+          <li>RTMP + stream key <span class="lock">WireGuard 🔒</span></li>
+          <li>nginx-rtmp on the Web Frontend</li>
+          <li>HLS (3 s) · DASH (15 s) chunks</li>
+          <li>Your browser</li>
+        </ul>
+      </section>
+    </aside>
+  </div>
+
+  <footer>MSS · Cloud Automation &amp; Infrastructure as Code · deployed with Terraform + Ansible</footer>
+</div>
+
+{% raw %}
+<script>
+(() => {
+  const SOURCES = { hls: '/hls/stream.m3u8', dash: '/dash/stream.mpd' };
+  const DASHJS = {
+    src: 'https://cdn.jsdelivr.net/npm/dashjs@4.7.4/dist/dash.all.min.js',
+    integrity: 'sha384-fl7i8WZxcPlF9b1503+Gm+izr/2hpilydj0i/DlQTIafROZ1NP4rAWjyl6p3s1ev',
+  };
+  const RETRY_MS = 4000;
+
+  const $ = (id) => document.getElementById(id);
+  const video = $('video');
+  let format = 'hls';
+  let hls = null, dash = null, retryTimer = null;
+
+  function setBadge(state) {           // 'live' | 'wait' | 'off'
+    const badge = $('badge');
+    badge.className = 'badge ' + state;
+    $('badge-text').textContent = { live: 'LIVE', wait: 'CONNECTING', off: 'OFFLINE' }[state];
+  }
+
+  function showOverlay(text) {
+    $('overlay-text').textContent = text;
+    $('overlay').hidden = false;
+  }
+
+  function hideOverlay() { $('overlay').hidden = true; }
+
+  function scheduleRetry(reason) {
+    setBadge('off');
+    showOverlay(reason + ' Retrying…');
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(start, RETRY_MS);
+  }
+
+  function teardown() {
+    clearTimeout(retryTimer);
+    if (hls) { hls.destroy(); hls = null; }
+    if (dash) { dash.reset(); dash = null; }
+    video.removeAttribute('src');
+    video.load();
+  }
+
+  function loadDashJs() {
+    if (window.dashjs) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = DASHJS.src;
+      s.integrity = DASHJS.integrity;
+      s.crossOrigin = 'anonymous';
+      s.onload = resolve;
+      s.onerror = () => reject(new Error('dash.js failed to load'));
+      document.head.appendChild(s);
+    });
+  }
+
+  function startHls() {
+    if (window.Hls && Hls.isSupported()) {
+      hls = new Hls({ liveSyncDurationCount: 3, manifestLoadingMaxRetry: 2 });
+      hls.on(Hls.Events.ERROR, (_, data) => {
+        if (data.fatal) scheduleRetry('Stream unavailable.');
+      });
+      hls.loadSource(SOURCES.hls);
       hls.attachMedia(video);
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = src;
+      video.src = SOURCES.hls;                    // Safari plays HLS natively
+    } else {
+      showOverlay('This browser cannot play HLS. Try DASH.');
     }
-  </script>
+  }
+
+  async function startDash() {
+    try {
+      await loadDashJs();
+    } catch (e) {
+      return scheduleRetry('Could not load the DASH player.');
+    }
+    dash = dashjs.MediaPlayer().create();
+    dash.updateSettings({ streaming: { delay: { liveDelay: 30 } } });
+    dash.on(dashjs.MediaPlayer.events.ERROR, () => scheduleRetry('Stream unavailable.'));
+    dash.initialize(video, SOURCES.dash, true);
+  }
+
+  function start() {
+    teardown();
+    setBadge('wait');
+    showOverlay('Connecting to the live stream…');
+    $('s-format').textContent = format.toUpperCase();
+    format === 'hls' ? startHls() : startDash();
+  }
+
+  function selectFormat(next) {
+    if (next === format) return;
+    format = next;
+    $('btn-hls').setAttribute('aria-pressed', String(next === 'hls'));
+    $('btn-dash').setAttribute('aria-pressed', String(next === 'dash'));
+    start();
+  }
+
+  function goLive() {
+    if (hls && hls.liveSyncPosition) video.currentTime = hls.liveSyncPosition;
+    else if (dash) dash.seek(dash.duration());
+    else if (video.seekable.length) video.currentTime = video.seekable.end(video.seekable.length - 1);
+    video.play().catch(() => {});
+  }
+
+  function latency() {
+    if (hls && Number.isFinite(hls.latency)) return hls.latency;
+    if (dash) { const l = dash.getCurrentLiveLatency(); if (Number.isFinite(l)) return l; }
+    return NaN;
+  }
+
+  function updateStats() {
+    const playing = !video.paused && video.readyState >= 3;
+    $('s-status').textContent = video.paused ? 'Paused' : playing ? 'Playing' : 'Buffering';
+    $('s-res').textContent = video.videoWidth ? `${video.videoWidth}×${video.videoHeight}` : '–';
+
+    const lat = latency();
+    $('s-lat').textContent = Number.isFinite(lat) ? `${lat.toFixed(1)} s` : '–';
+
+    const b = video.buffered;
+    const ahead = b.length ? b.end(b.length - 1) - video.currentTime : 0;
+    $('s-buf').textContent = b.length ? `${Math.max(0, ahead).toFixed(1)} s` : '–';
+
+    const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+    $('s-drop').textContent = q ? `${q.droppedVideoFrames} / ${q.totalVideoFrames}` : '–';
+  }
+
+  video.addEventListener('playing', () => { setBadge('live'); hideOverlay(); });
+  video.addEventListener('waiting', () => showOverlay('Buffering…'));
+  video.addEventListener('canplay', hideOverlay);
+
+  $('btn-hls').addEventListener('click', () => selectFormat('hls'));
+  $('btn-dash').addEventListener('click', () => selectFormat('dash'));
+  $('btn-live').addEventListener('click', goLive);
+
+  setInterval(updateStats, 1000);
+  start();
+})();
+</script>
+{% endraw %}
 </body>
 </html>
