@@ -39,12 +39,28 @@ resource "aws_instance" "frontend" {
     private_cidr = data.aws_subnet.private.cidr_block
   })
 
+  # IMDSv2 only: credentials require a session token obtained with a PUT,
+  # which SSRF-style plain GET requests can't do
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
+
+  # Disk encrypted at rest with our KMS key (envelope encryption)
+  root_block_device {
+    encrypted  = true
+    kms_key_id = aws_kms_key.ebs.arn
+  }
+
   tags = { Name = "mss-web-frontend" }
 
   lifecycle {
-    # AWS reports false while the instance is stopped (no public IP); the
-    # interface still gets a new public IP when it starts again
-    ignore_changes = [associate_public_ip_address]
+    # - associate_public_ip_address: AWS reports false while the instance is
+    #   stopped (no public IP); it still gets a new public IP when it starts
+    # - ami: a newer Ubuntu image must not rebuild a running server; new
+    #   servers still pick up the latest image
+    ignore_changes = [associate_public_ip_address, ami]
   }
 }
 
@@ -55,7 +71,26 @@ resource "aws_instance" "streamer" {
   vpc_security_group_ids = [aws_security_group.streamer.id]
   key_name               = aws_key_pair.mss.key_name
 
+  # IMDSv2 only: credentials require a session token obtained with a PUT,
+  # which SSRF-style plain GET requests can't do
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
+
+  # Disk encrypted at rest with our KMS key (envelope encryption)
+  root_block_device {
+    encrypted  = true
+    kms_key_id = aws_kms_key.ebs.arn
+  }
+
   tags = { Name = "mss-video-streamer" }
+
+  lifecycle {
+    # A newer Ubuntu image must not rebuild a running server
+    ignore_changes = [ami]
+  }
 }
 
 # The lab account stops all instances at midnight. Bring them back up on every
