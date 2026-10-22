@@ -52,4 +52,52 @@ server {
 
         root /var/www/html/stream;
     }
+
+    # The web root contains the raw chunk folders (/var/www/html/stream/...).
+    # Never serve them directly: private channels would bypass the token check.
+    # Video is only served through /hls, /dash and the signed /private paths.
+    location ^~ /stream/ {
+        return 404;
+    }
+
+    # ---- Stream Studio (Flask app in Docker, listening on 127.0.0.1:5000) ----
+    location /studio/ {
+        proxy_pass http://127.0.0.1:5000;
+        include /etc/nginx/studio_proxy.conf;
+    }
+
+    # Login: at most 10 attempts per minute per client IP
+    location = /studio/login {
+        limit_req zone=studio_login burst=5 nodelay;
+        limit_req_status 429;
+        proxy_pass http://127.0.0.1:5000;
+        include /etc/nginx/studio_proxy.conf;
+    }
+
+    # Only nginx-rtmp may call this, directly on 127.0.0.1:5000
+    location /studio/internal/ {
+        return 404;
+    }
+
+    # ---- Private channels: signed, expiring HLS URLs ----
+    # /private/<token>/<expires>/<channel>.m3u8 and <channel>-<n>.ts. Before
+    # serving any file, nginx asks the Studio to verify the HMAC-SHA256 token
+    # and expiry (auth_request); invalid or expired -> 403.
+    location ~ "^/private/[A-Za-z0-9_-]{43}/[0-9]{1,12}/(?<file>[a-z0-9-]+(?:-[0-9]+\.ts|\.m3u8))$" {
+        auth_request /_playback_auth;
+        types {
+            application/vnd.apple.mpegurl m3u8;
+            video/mp2t ts;
+        }
+        add_header Cache-Control no-cache;
+        alias /var/www/html/stream/private/$file;
+    }
+
+    location = /_playback_auth {
+        internal;
+        proxy_pass http://127.0.0.1:5000/studio/internal/playback-auth;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header X-Original-URI $request_uri;
+    }
 }

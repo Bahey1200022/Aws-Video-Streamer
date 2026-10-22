@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Stream Studio{% endblock %} · MSS</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="{{ url_for('dashboard') }}">Stream Studio</a>
+  <nav>
+    <a href="/">Main stream</a>
+    {% if me %}
+      <a href="{{ url_for('dashboard') }}">My channels</a>
+      {% if me.role == 'admin' %}<a href="{{ url_for('admin') }}">Admin</a>{% endif %}
+      <form method="post" action="{{ url_for('logout') }}" class="inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="link">Log out {{ me.username }}</button>
+      </form>
+    {% endif %}
+  </nav>
+</header>
+<main class="wrap">
+  {% for category, message in get_flashed_messages(with_categories=true) %}
+    <div class="flash {{ category }}">{% if category == 'link' %}<code class="wrapcode">{{ message }}</code>{% else %}{{ message }}{% endif %}</div>
+  {% endfor %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

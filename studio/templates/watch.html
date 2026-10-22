@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{{ ch.name }}{% endblock %}
+{% block content %}
+<h1>{{ ch.name }} {% if ch.private %}<span class="tag">private</span>{% endif %}</h1>
+<div class="player">
+  <video id="video" controls autoplay muted playsinline data-src="{{ src }}"></video>
+  <p id="status" class="overlay">Connecting…</p>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"
+        integrity="sha384-w6Gb3fXHb5e1LUYa/hYA5Q41bEDglN5ZPCG7Jvnoo8/X90oGnlPqBlBJCe38mEMm"
+        crossorigin="anonymous"></script>
+<script src="{{ url_for('static', filename='watch.js') }}"></script>
+{% endblock %}

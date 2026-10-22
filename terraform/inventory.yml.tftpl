@@ -10,6 +10,9 @@ all:
     enable_tls: ${enable_tls}
     letsencrypt_staging: ${letsencrypt_staging}
     stream_key: ${stream_key}
+    studio_admin_password: ${studio_admin_password}
+    studio_secret_key: ${studio_secret_key}
+    link_secret: ${link_secret}
   children:
     frontend:
       hosts:

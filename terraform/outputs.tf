@@ -22,3 +22,12 @@ output "stream_key" {
 output "stream_url" {
   value = "${var.enable_tls && local.dns_enabled ? "https" : "http"}://${try(aws_route53_record.frontend[0].fqdn, local.frontend_public_ip)}/"
 }
+
+output "studio_url" {
+  value = "${var.enable_tls && local.dns_enabled ? "https" : "http"}://${try(aws_route53_record.frontend[0].fqdn, local.frontend_public_ip)}/studio/"
+}
+
+output "studio_admin_password" {
+  value     = random_password.studio_admin.result
+  sensitive = true
+}

@@ -1,0 +1,27 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Stream Studio (Flask app in a hardened container)
+After=docker.service
+Requires=docker.service
+
+[Service]
+ExecStartPre=-/usr/bin/docker rm -f studio
+# --network host: binds 127.0.0.1:5000 for nginx and reaches nginx-rtmp on
+#   127.0.0.1:1935 (Docker's own iptables management is disabled, see daemon.json)
+# --read-only, --tmpfs /tmp: the image can't be modified at runtime
+# --cap-drop ALL, no-new-privileges: no root capabilities, no privilege escalation
+# --pids-limit, --memory: a runaway process can't starve the frontend
+ExecStart=/usr/bin/docker run --rm --name studio \
+  --network host \
+  --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  --cap-drop ALL --security-opt no-new-privileges \
+  --pids-limit 256 --memory 400m \
+  --env-file /etc/studio.env \
+  -v /var/lib/studio:/data \
+  studio:latest
+ExecStop=/usr/bin/docker stop -t 10 studio
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -74,6 +74,83 @@
         - /var/www/html/stream
         - /var/www/html/stream/hls
         - /var/www/html/stream/dash
+        - /var/www/html/stream/private
+
+    # ---- Stream Studio (Flask app in a hardened Docker container) ----
+    # Docker normally rewrites iptables and sets the FORWARD policy to DROP,
+    # which would break the NAT the Video Streamer depends on. The daemon
+    # config must exist before the package starts dockerd for the first time.
+    - name: Create Docker config directory
+      ansible.builtin.file:
+        path: /etc/docker
+        state: directory
+        mode: "0755"
+
+    - name: Keep Docker away from iptables (host networking only)
+      ansible.builtin.copy:
+        dest: /etc/docker/daemon.json
+        content: '{"iptables": false, "bridge": "none"}'
+        mode: "0644"
+      register: docker_config
+
+    - name: Install Docker
+      ansible.builtin.apt:
+        name: docker.io
+
+    - name: Apply Docker daemon config
+      ansible.builtin.systemd:
+        name: docker
+        state: restarted
+      when: docker_config.changed
+
+    - name: Create Studio data folder (owned by the container's uid)
+      ansible.builtin.file:
+        path: /var/lib/studio
+        state: directory
+        owner: "10001"
+        group: "10001"
+        mode: "0700"
+
+    - name: Copy Studio source
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../studio/"
+        dest: /opt/studio/
+        mode: preserve
+      register: studio_src
+
+    - name: Check for Studio image
+      ansible.builtin.command: docker image inspect studio:latest
+      register: studio_image
+      changed_when: false
+      failed_when: false
+
+    - name: Build Studio image
+      ansible.builtin.command: docker build --network host -t studio:latest /opt/studio
+      when: studio_src.changed or studio_image.rc != 0
+      notify: Restart Studio
+
+    - name: Install Studio secrets (root-only)
+      ansible.builtin.template:
+        src: studio.env.j2
+        dest: /etc/studio.env
+        owner: root
+        group: root
+        mode: "0600"
+      notify: Restart Studio
+
+    - name: Install Studio service
+      ansible.builtin.template:
+        src: studio.service.j2
+        dest: /etc/systemd/system/studio.service
+        mode: "0644"
+      notify: Restart Studio
+
+    - name: Start Studio
+      ansible.builtin.systemd:
+        name: studio
+        state: started
+        enabled: true
+        daemon_reload: true
 
     - name: Install certbot with the Route 53 DNS plugin
       ansible.builtin.apt:
@@ -100,7 +177,14 @@
         dest: /etc/nginx/nginx.conf
         owner: root
         group: root
-        mode: "0600" # contains the stream key
+        mode: "0644"
+      notify: Reload nginx
+
+    - name: Configure Studio reverse-proxy settings
+      ansible.builtin.template:
+        src: studio_proxy.conf.j2
+        dest: /etc/nginx/studio_proxy.conf
+        mode: "0644"
       notify: Reload nginx
 
     - name: Configure streamer site (serves HLS and DASH chunks)
@@ -147,10 +231,21 @@
         name: wg-quick@wg0
         state: restarted
 
+    # Before the nginx reload: nginx-rtmp's on_publish calls the Studio
+    - name: Restart Studio
+      ansible.builtin.systemd:
+        name: studio
+        state: restarted
+        daemon_reload: true
+
+    # Restart rather than reload: a reload keeps the old listening sockets, so
+    # moving a listener (e.g. 0.0.0.0:8080 -> 127.0.0.1:8080) fails with
+    # "could not bind()" while systemd still reports success. RTMP publishers
+    # reconnect either way.
     - name: Reload nginx
       ansible.builtin.service:
         name: nginx
-        state: reloaded
+        state: restarted
 
 - name: Video Streamer (ffmpeg loop to RTMP)
   hosts: streamer

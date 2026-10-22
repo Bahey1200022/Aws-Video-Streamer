@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Admin{% endblock %}
+{% block content %}
+<h1>Admin</h1>
+
+<section class="card">
+  <h2>Users</h2>
+  <table>
+    <tr><th>Username</th><th>Role</th><th></th></tr>
+    {% for u in users %}
+    <tr>
+      <td>{{ u.username }}</td><td>{{ u.role }}</td>
+      <td>{% if u.username != 'admin' %}
+        <form method="post" action="{{ url_for('delete_user', user_id=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="danger">Delete</button></form>
+      {% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <form method="post" action="{{ url_for('create_user') }}" class="row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input name="username" placeholder="username" required maxlength="32">
+    <input name="password" type="password" placeholder="password (12+ chars)" required minlength="12" autocomplete="new-password">
+    <select name="role"><option value="user">user</option><option value="admin">admin</option></select>
+    <button class="primary">Add user</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Audit log <span class="muted">(latest 150)</span></h2>
+  <div class="scroll">
+  <table class="log">
+    <tr><th>Time (UTC)</th><th>User</th><th>IP</th><th>Action</th><th>Detail</th></tr>
+    {% for e in events %}
+    <tr class="{{ 'bad' if e.action in ('login_failed', 'login_locked', 'publish_denied', 'import_blocked', 'watch_denied', 'access_denied') }}">
+      <td>{{ e.ts }}</td><td>{{ e.username or '' }}</td><td>{{ e.ip or '' }}</td><td>{{ e.action }}</td><td>{{ e.detail or '' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+</section>
+{% endblock %}

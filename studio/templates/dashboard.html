@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Channels{% endblock %}
+{% block content %}
+<h1>Channels</h1>
+
+<section class="card">
+  <h2>New channel</h2>
+  <form method="post" action="{{ url_for('create_channel') }}" class="row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input name="name" placeholder="my-channel" pattern="[a-z0-9][a-z0-9-]{1,30}[a-z0-9]" required>
+    <label class="check"><input type="checkbox" name="private" value="1"> Private (share links only)</label>
+    <button class="primary">Create</button>
+  </form>
+</section>
+
+{% for ch in channels %}
+<section class="card channel">
+  <div class="channel-head">
+    <h2>{{ ch.name }}
+      {% if ch.private %}<span class="tag">private</span>{% else %}<span class="tag">public</span>{% endif %}
+      {% if ch.system %}<span class="tag">system</span>{% endif %}
+    </h2>
+    {% if ch.live %}<span class="badge live">LIVE</span>{% else %}<span class="badge">offline</span>{% endif %}
+  </div>
+  <p class="muted">Owner: {{ ch.owner }} ·
+    {% if ch.system %}fed by the Video Streamer over WireGuard
+    {% else %}video: {{ ch.video_status }}{% endif %} ·
+    <a href="{{ url_for('watch', name=ch.name) }}">watch</a></p>
+
+  <details>
+    <summary>Stream key</summary>
+    <code class="wrapcode">{{ ch.stream_key }}</code>
+    <p class="muted">Publishing to <code>rtmp://…/{{ 'private' if ch.private else 'live' }}/{{ ch.name }}?key=…</code> is only accepted from inside the platform.</p>
+  </details>
+
+  {% if not ch.system %}
+  <form method="post" action="{{ url_for('import_video', name=ch.name) }}" class="row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input name="url" type="url" placeholder="https://example.com/video.mp4" required maxlength="2048">
+    <button>Import video</button>
+  </form>
+  {% endif %}
+
+  <div class="row actions">
+    {% if not ch.system %}
+      {% if ch.live %}
+        <form method="post" action="{{ url_for('stop_channel', name=ch.name) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>Stop</button></form>
+      {% elif ch.video_status == 'ready' %}
+        <form method="post" action="{{ url_for('start_channel', name=ch.name) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="primary">Go live</button></form>
+      {% endif %}
+      <form method="post" action="{{ url_for('rotate_key', name=ch.name) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>Rotate key</button></form>
+    {% endif %}
+    {% if ch.private %}
+      <form method="post" action="{{ url_for('share_link', name=ch.name) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>Create share link</button></form>
+      <form method="post" action="{{ url_for('revoke_links', name=ch.name) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>Revoke share links</button></form>
+    {% endif %}
+    {% if not ch.system %}
+      <form method="post" action="{{ url_for('delete_channel', name=ch.name) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="danger">Delete</button></form>
+    {% endif %}
+  </div>
+</section>
+{% else %}
+<p class="muted">No channels yet.</p>
+{% endfor %}
+<p class="muted">At most {{ max_running }} imported channels can be live at the same time.</p>
+{% endblock %}
