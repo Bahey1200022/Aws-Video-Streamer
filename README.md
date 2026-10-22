@@ -48,7 +48,7 @@ to browsers.
 │  Private subnet 192.168.1.0/24   ║                                          │
 │  ┌───────────────────────────────╨───────────────────────┐                  │
 │  │ Video Streamer (EC2, Ubuntu 22.04, no public IP)      │                  │
-│  │  ffmpeg loop: BigBuckBunny → rtmp://10.99.0.1/live    │                  │
+│  │  ffmpeg loop: Elephants Dream → rtmp://10.99.0.1/live │                  │
 │  │  WireGuard wg0 10.99.0.2                              │                  │
 │  └───────────────────────────────────────────────────────┘                  │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -81,7 +81,7 @@ to browsers.
 | Re-runs only when needed | Triggered by instance changes, inventory changes, or edits to the playbook, templates or group vars |
 | Jump host | The private streamer is reached through the frontend (SSH `ProxyCommand`) |
 | Web Frontend | nginx, libnginx-mod-rtmp, ffmpeg; RTMP ingest; HLS + DASH output; CORS; HTML5 player (hls.js) |
-| Video Streamer | ffmpeg as a systemd service (`Restart=always`) looping `BigBuckBunny_320x180.mp4` |
+| Video Streamer | ffmpeg as a systemd service (`Restart=always`) looping the video set in `group_vars/all.yml` (default: *Elephants Dream*, 480p) |
 | Video download workaround | download.blender.org returns 403 to AWS IPs, so the file is fetched on the control machine and uploaded |
 | Robustness | 60 s connection timeout for the jump host; `force_handlers` so restarts still run if a later task fails |
 | Optional HTTPS | Let's Encrypt via certbot DNS-01 with Route 53; HTTP→HTTPS redirect (see [limitations](#known-limitations)) |

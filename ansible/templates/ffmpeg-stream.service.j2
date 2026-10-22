@@ -10,7 +10,7 @@ ExecStart=/usr/bin/ffmpeg -nostdin -loglevel warning \
   -stream_loop -1 \
   -re \
   -i {{ video_dir }}/{{ video_file }} \
-  -c:v libx264 \
+  -c:v libx264 -preset veryfast \
   -c:a aac \
   -f flv \
   rtmp://{{ wg_frontend_ip }}:1935/live/stream?key=${STREAM_KEY}

@@ -147,23 +147,23 @@
         name: wg-quick@wg0
         state: restarted
 
+    # Restart rather than reload: a reload keeps the old listening sockets, so
+    # moving a listener (e.g. 127.0.0.1:8080 <-> 0.0.0.0:8080) fails with
+    # "could not bind()" while systemd still reports success, leaving the old
+    # config running. RTMP publishers reconnect either way.
     - name: Reload nginx
       ansible.builtin.service:
         name: nginx
-        state: reloaded
+        state: restarted
 
 - name: Video Streamer (ffmpeg loop to RTMP)
   hosts: streamer
   become: true
   gather_facts: false
-  vars:
-    video_dir: /videos
-    video_file: BigBuckBunny_320x180.mp4
-    video_url: https://download.blender.org/peach/bigbuckbunny_movies/BigBuckBunny_320x180.mp4.zip
   tasks:
     - name: Install packages
       ansible.builtin.apt:
-        name: [ffmpeg, unzip]
+        name: [ffmpeg]
         update_cache: true
         cache_valid_time: 3600
 
@@ -175,20 +175,21 @@
 
     # download.blender.org returns 403 to AWS IPs, so fetch it on the
     # control machine once and upload it from there
-    - name: Download sample video on the control machine
+    - name: Download video on the control machine
       ansible.builtin.get_url:
         url: "{{ video_url }}"
-        dest: "{{ playbook_dir }}/files/{{ video_file }}.zip"
+        dest: "{{ playbook_dir }}/files/{{ video_file }}"
         mode: "0644"
       delegate_to: localhost
       become: false
       run_once: true
 
-    - name: Upload and unpack sample video
-      ansible.builtin.unarchive:
-        src: "{{ playbook_dir }}/files/{{ video_file }}.zip"
-        dest: "{{ video_dir }}"
-        creates: "{{ video_dir }}/{{ video_file }}"
+    - name: Upload video to the streamer
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/files/{{ video_file }}"
+        dest: "{{ video_dir }}/{{ video_file }}"
+        mode: "0644"
+      notify: Restart stream
 
     - name: Configure WireGuard tunnel (connects to the frontend)
       ansible.builtin.template:
