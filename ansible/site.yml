@@ -134,6 +134,15 @@
         path: /etc/letsencrypt/live/{{ cert_name }}/fullchain.pem
       register: cert
 
+    - name: Create the weather cache folder (nginx can't create its parent)
+      ansible.builtin.file:
+        path: /var/cache/nginx/weather
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: "0700"
+      when: openweather_api_key | length > 0
+
     - name: Configure nginx (main config with RTMP ingest)
       ansible.builtin.template:
         src: nginx.conf.j2
@@ -149,7 +158,9 @@
       ansible.builtin.template:
         src: streamer.site.j2
         dest: /etc/nginx/sites-available/streamer
-        mode: "0644"
+        owner: root
+        group: root
+        mode: "0600" # contains the weather API key
       vars:
         tls_active: "{{ cert.stat.exists }}"
       notify: Reload nginx
@@ -249,6 +260,22 @@
         name: nginx
         state: started
         enabled: true
+
+    # Safety net: if an earlier run wrote new config but stopped before the
+    # restart (e.g. a failed config check), files are "unchanged" now and no
+    # handler fires - restart if any config file is newer than the running nginx
+    - name: Restart nginx if its running config is older than the files
+      ansible.builtin.shell: |
+        set -o pipefail
+        started=$(date -d "$(systemctl show nginx -p ActiveEnterTimestamp --value)" +%s)
+        newest=$(find /etc/nginx -type f -printf '%T@\n' | sort -n | tail -1 | cut -d. -f1)
+        if [ "$newest" -gt "$started" ]; then
+          nginx -t && systemctl restart nginx && echo restarted
+        fi
+      args:
+        executable: /bin/bash
+      register: nginx_stale
+      changed_when: "'restarted' in nginx_stale.stdout"
 
   handlers:
     - name: Restart WireGuard

@@ -82,3 +82,16 @@ variable "camera_enabled" {
   type        = bool
   default     = false
 }
+
+# ---- Live weather next to the video (OpenWeatherMap) ----
+variable "openweather_api_key" {
+  description = "OpenWeatherMap API key - put it in the git-ignored secrets.auto.tfvars. Empty disables the weather widget."
+  type        = string
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = var.openweather_api_key == "" || can(regex("^[0-9a-f]{32}$", var.openweather_api_key))
+    error_message = "An OpenWeatherMap API key is 32 lowercase hex characters."
+  }
+}

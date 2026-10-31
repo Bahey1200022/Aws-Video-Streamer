@@ -21,6 +21,13 @@ http {
 
     default_type    application/octet-stream;
 
+{% if openweather_api_key %}
+    # Weather proxy: one upstream call per 10 minutes whatever the number of
+    # viewers (protects the API quota), and at most 30 requests/min per client
+    proxy_cache_path /var/cache/nginx/weather levels=1 keys_zone=weather:1m max_size=1m inactive=1h use_temp_path=off;
+    limit_req_zone $binary_remote_addr zone=weather_per_ip:1m rate=30r/m;
+{% endif %}
+
     # Publish authentication: nginx-rtmp asks this endpoint before accepting
     # a stream. Only the stream "stream" with the right key is allowed.
     map "$arg_name:$arg_key" $publish_allowed {

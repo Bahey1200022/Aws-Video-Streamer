@@ -83,6 +83,8 @@
     .channels a { color: var(--muted); text-decoration: none; padding: 5px 12px; border-radius: 999px;
                   border: 1px solid var(--line); font-size: 13px; }
     .channels a[aria-current="page"] { color: #fff; background: var(--accent); border-color: var(--accent); }
+    .weather { font-size: 13px; color: var(--muted); padding: 6px 12px; border-radius: 999px;
+               background: var(--panel); border: 1px solid var(--line); white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -94,6 +96,9 @@
       <a href="/"{{ ' aria-current="page"' if page_channel == 'stream' else '' }}>{{ video_title }}</a>
       <a href="/camera/"{{ ' aria-current="page"' if page_channel == 'camera' else '' }}>Camera 🔒</a>
     </nav>
+{% endif %}
+{% if openweather_api_key %}
+    <span id="weather" class="weather" hidden title="{{ weather_location_name }} - OpenWeatherMap, refreshed every 10 min"></span>
 {% endif %}
     <span id="badge" class="badge wait"><span class="dot"></span><span id="badge-text">CONNECTING</span></span>
   </header>
@@ -298,6 +303,31 @@
   $('btn-live').addEventListener('click', goLive);
 
   setInterval(updateStats, 1000);
+
+  // Live weather from /api/weather (our own nginx; the API key stays on the
+  // server). The response comes from a third party, so it is treated as
+  // untrusted: only finite numbers are used, and text is set with textContent
+  // (never innerHTML), so nothing in it can run as script.
+  const weatherEl = document.getElementById('weather');
+  async function updateWeather() {
+    try {
+      const res = await fetch('/api/weather', { cache: 'no-store' });
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+      const temp = data && data.main ? Number(data.main.temp) : NaN;
+      if (!Number.isFinite(temp) || temp < -90 || temp > 70) throw new Error('bad data');
+      const desc = data.weather && data.weather[0] && typeof data.weather[0].description === 'string'
+        ? data.weather[0].description.slice(0, 40) : '';
+      weatherEl.textContent = `📍 ${weatherEl.title.split(' - ')[0]} · ${Math.round(temp)} °C${desc ? ' · ' + desc : ''}`;
+      weatherEl.hidden = false;
+    } catch (e) {
+      weatherEl.hidden = true;             // no weather: the video is unaffected
+    }
+  }
+  if (weatherEl) {
+    updateWeather();
+    setInterval(updateWeather, 10 * 60 * 1000);
+  }
   start();
 })();
 </script>

@@ -13,3 +13,8 @@ video_dir: /videos
 
 # Let's Encrypt certificate name (staging certificates are kept separate)
 cert_name: "{{ fqdn }}{{ '-staging' if letsencrypt_staging | bool else '' }}"
+
+# Live weather shown next to the video (fetched by nginx, never by browsers)
+weather_location_name: Paris
+weather_lat: 48.8566
+weather_lon: 2.3522

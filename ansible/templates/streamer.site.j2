@@ -73,6 +73,58 @@ server {
     }
 
 {% endif %}
+{% if openweather_api_key %}
+    # ---- Live weather: nginx fetches it server-side, so the API key never
+    # reaches browsers and viewers' IPs are never sent to the weather service ----
+    location = /api/weather {
+        limit_req zone=weather_per_ip burst=10 nodelay;
+        limit_req_status 429;
+
+        # "set" must come before "rewrite ... break", which stops every later
+        # rewrite-module directive (set included)
+        set $weather_upstream api.openweathermap.org;
+
+        # Fixed upstream request: visitors can't choose what is fetched (no SSRF,
+        # no open proxy). The rewrite replaces any client query string.
+        rewrite ^ "/data/2.5/weather?lat={{ weather_lat }}&lon={{ weather_lon }}&units=metric&appid={{ openweather_api_key }}" break;
+
+        # Resolved at request time through the VPC's DNS: if the weather service
+        # is unreachable only this endpoint fails - nginx still starts
+        resolver 169.254.169.253 valid=300s ipv6=off;
+        resolver_timeout 3s;
+        proxy_pass https://$weather_upstream;
+
+        # Verify the weather service's TLS certificate (nginx doesn't by default)
+        proxy_ssl_server_name on;
+        proxy_ssl_name api.openweathermap.org;
+        proxy_ssl_verify on;
+        proxy_ssl_verify_depth 3;
+        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+        proxy_set_header Host api.openweathermap.org;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 5s;
+
+        # Fixed cache key: random query strings can't bypass the cache and burn
+        # the quota. Serve a stale copy if the service is down.
+        proxy_cache weather;
+        proxy_cache_key "weather-{{ weather_lat }}-{{ weather_lon }}";
+        proxy_cache_valid 200 10m;
+        # Errors (e.g. a not-yet-active key) are cached briefly too, so a broken
+        # upstream can't turn every page view into an API call
+        proxy_cache_valid any 1m;
+        proxy_cache_lock on;
+        proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+        proxy_ignore_headers Cache-Control Expires Set-Cookie;
+        proxy_hide_header Set-Cookie;
+        add_header X-Cache $upstream_cache_status always;
+        add_header Cache-Control "no-store" always;
+
+        # The key is in the upstream URL, and nginx error lines include it:
+        # only log critical errors for this endpoint
+        error_log /var/log/nginx/weather-error.log crit;
+    }
+
+{% endif %}
     location /hls {
         add_header Access-Control-Allow-Origin *;
         root /var/www/html/stream;

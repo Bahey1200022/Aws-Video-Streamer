@@ -22,6 +22,7 @@ resource "local_file" "inventory" {
     letsencrypt_staging  = var.letsencrypt_staging
     acme_challenge       = var.acme_challenge
     camera_enabled       = var.camera_enabled
+    openweather_api_key  = var.openweather_api_key
     camera_key           = random_password.camera_key.result
     camera_view_password = random_password.camera_view.result
     stream_key           = random_password.stream_key.result
