@@ -3,15 +3,33 @@
 server {
     listen 80;
     server_name {{ fqdn }};
-    return 301 https://$host$request_uri;
+
+    # Let's Encrypt HTTP-01 challenges (issue and renewal) stay on plain HTTP
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/html;
+        default_type text/plain;
+    }
+
+    # Everything else moves to HTTPS
+    location / {
+        return 301 https://$host$request_uri;
+    }
 }
 
 {% endif %}
 server {
 {% if tls_active %}
     listen 443 ssl;
-    ssl_certificate /etc/letsencrypt/live/{{ fqdn }}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/{{ fqdn }}/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/{{ cert_name }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ cert_name }}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+{% if not letsencrypt_staging | bool %}
+    # Browsers must use HTTPS for this site (only with a trusted cert). Kept to
+    # one day: if a lab rebuild ever failed to get a new certificate, browsers
+    # would otherwise refuse the site for a year.
+    add_header Strict-Transport-Security "max-age=86400" always;
+{% endif %}
 {% else %}
     listen 80;
 {% endif %}

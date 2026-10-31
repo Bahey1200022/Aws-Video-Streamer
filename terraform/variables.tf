@@ -50,9 +50,24 @@ variable "frontend_instance_profile" {
 }
 
 variable "enable_tls" {
-  description = "Request a Let's Encrypt certificate via DNS-01. Needs the instance profile to allow changes in the hosted zone."
+  description = "Request a Let's Encrypt certificate and serve the site over HTTPS (see acme_challenge)"
   type        = bool
   default     = false
+}
+
+variable "acme_challenge" {
+  description = <<-EOT
+    How Let's Encrypt verifies we control the domain:
+    "dns"  - DNS-01: a TXT record in Route 53 (the lab design; needs the instance profile to allow changes in the hosted zone)
+    "http" - HTTP-01: a file served by nginx on port 80 (no AWS permissions needed)
+  EOT
+  type        = string
+  default     = "dns"
+
+  validation {
+    condition     = contains(["dns", "http"], var.acme_challenge)
+    error_message = "acme_challenge must be \"dns\" or \"http\"."
+  }
 }
 
 variable "letsencrypt_staging" {

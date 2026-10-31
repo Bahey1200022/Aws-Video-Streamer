@@ -20,6 +20,7 @@ resource "local_file" "inventory" {
     streamer_private_ip = aws_instance.streamer.private_ip
     enable_tls          = var.enable_tls && local.dns_enabled
     letsencrypt_staging = var.letsencrypt_staging
+    acme_challenge      = var.acme_challenge
     stream_key          = random_password.stream_key.result
   })
 }

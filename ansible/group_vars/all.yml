@@ -10,3 +10,6 @@ video_title: Elephants Dream
 video_file: elephantsdream-480-h264-st-aac.mov
 video_url: https://download.blender.org/ED/elephantsdream-480-h264-st-aac.mov
 video_dir: /videos
+
+# Let's Encrypt certificate name (staging certificates are kept separate)
+cert_name: "{{ fqdn }}{{ '-staging' if letsencrypt_staging | bool else '' }}"

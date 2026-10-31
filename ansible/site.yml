@@ -75,23 +75,53 @@
         - /var/www/html/stream/hls
         - /var/www/html/stream/dash
 
-    - name: Install certbot with the Route 53 DNS plugin
+    - name: Install certbot (+ Route 53 plugin for DNS-01)
       ansible.builtin.apt:
-        name: [certbot, python3-certbot-dns-route53]
+        name: "{{ ['certbot'] + (['python3-certbot-dns-route53'] if acme_challenge == 'dns' else []) }}"
       when: enable_tls | bool
 
-    - name: Request certificate (DNS-01 challenge through Route 53)
+    # HTTP-01: Let's Encrypt downloads a token from
+    # http://<fqdn>/.well-known/acme-challenge/ - nginx serves it from the web
+    # root, so nginx must be running with port 80 open before this runs
+    - name: Create ACME challenge folder
+      ansible.builtin.file:
+        path: /var/www/html/.well-known/acme-challenge
+        state: directory
+        mode: "0755"
+      when: enable_tls | bool and acme_challenge == 'http'
+
+    - name: Ensure nginx is serving port 80 for the challenge
+      ansible.builtin.service:
+        name: nginx
+        state: started
+      when: enable_tls | bool and acme_challenge == 'http'
+
+    # Staging and production certificates get different names, so switching
+    # letsencrypt_staging off really requests a new, trusted certificate
+    - name: Request certificate
       ansible.builtin.command: >
-        certbot certonly --dns-route53 -d {{ fqdn }}
+        certbot certonly
+        {{ '--dns-route53' if acme_challenge == 'dns' else '--webroot -w /var/www/html' }}
+        -d {{ fqdn }} --cert-name {{ cert_name }}
         --non-interactive --agree-tos --register-unsafely-without-email
         {{ '--staging' if letsencrypt_staging | bool else '' }}
       args:
-        creates: /etc/letsencrypt/live/{{ fqdn }}/fullchain.pem
+        creates: /etc/letsencrypt/live/{{ cert_name }}/fullchain.pem
+      when: enable_tls | bool
+
+    - name: Restart nginx after automatic renewals
+      ansible.builtin.copy:
+        dest: /etc/letsencrypt/renewal-hooks/deploy/restart-nginx.sh
+        content: |
+          #!/bin/sh
+          # Installed by Ansible: load the renewed certificate
+          systemctl restart nginx
+        mode: "0755"
       when: enable_tls | bool
 
     - name: Check for certificate
       ansible.builtin.stat:
-        path: /etc/letsencrypt/live/{{ fqdn }}/fullchain.pem
+        path: /etc/letsencrypt/live/{{ cert_name }}/fullchain.pem
       register: cert
 
     - name: Configure nginx (main config with RTMP ingest)

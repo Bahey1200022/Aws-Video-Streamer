@@ -1,5 +1,5 @@
 resource "aws_security_group" "frontend" {
-  # checkov:skip=CKV_AWS_260: public website - port 80 must be open to everyone (HTTPS is blocked by the lab's IAM policy, see README)
+  # checkov:skip=CKV_AWS_260: public website - port 80 must stay open: it redirects to HTTPS and serves Let's Encrypt HTTP-01 challenges
   name        = "mss-frontend"
   description = "Web frontend"
   vpc_id      = data.aws_vpc.main.id

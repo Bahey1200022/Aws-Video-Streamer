@@ -85,7 +85,7 @@ to browsers.
 | Video Streamer | ffmpeg as a systemd service (`Restart=always`) looping the video set in `group_vars/all.yml` (default: *Elephants Dream*, 480p) |
 | Video download workaround | download.blender.org returns 403 to AWS IPs, so the file is fetched on the control machine and uploaded |
 | Robustness | 60 s connection timeout for the jump host; `force_handlers` so restarts still run if a later task fails |
-| Optional HTTPS | Let's Encrypt via certbot DNS-01 with Route 53; HTTP→HTTPS redirect (see [limitations](#known-limitations)) |
+| HTTPS | Let's Encrypt via certbot, through **DNS-01** (Route 53, the lab design) or **HTTP-01** (port 80); HTTP→HTTPS redirect; automatic renewal |
 
 ---
 
@@ -150,7 +150,23 @@ RTMP (1935) and the RTMP control endpoint (8080) are **not reachable over the ne
 - **Key policy written in code** ([kms.tf](terraform/kms.tf)): the account administers the key, and IAM decides who may use it. That's the same access as AWS's default, but visible and reviewable.
 - **Lab caveat:** this policy delegates to IAM, and every student shares the same `DevopsLab` role. A key policy restricted to a specific SSO session would be needed to keep classmates out.
 
-### 6. Credentials and secrets hygiene
+### 6. Encryption to viewers (HTTPS)
+- **Live:** `https://bahey.devops.gin-telecom.ovh/` uses a **trusted Let's Encrypt certificate**. `http://` redirects (301) to HTTPS.
+- **TLS 1.2 and 1.3 only**: TLS 1.1 and older are refused.
+- **HSTS** (`Strict-Transport-Security: max-age=86400`) tells browsers to use HTTPS only. It's kept to one day so a failed certificate after a lab rebuild can't lock visitors out for a year.
+- **Two ways to prove domain ownership**, selected with `acme_challenge`:
+
+  | | `dns` (DNS-01, the lab design) | `http` (HTTP-01, **in use**) |
+  |---|---|---|
+  | Proof | TXT record `_acme-challenge.<fqdn>` written to Route 53 through the `r53-devops` role | Token file served by nginx at `http://<fqdn>/.well-known/acme-challenge/…` |
+  | Needs | IAM permission on the hosted zone | Port 80 reachable |
+  | Status | Implemented, **blocked**: the lab's policy only covers two deleted zones (`AccessDenied` on `Z0316326GXOE1JMI1YJX`) | ✅ Working |
+
+  The resulting certificate and encryption are identical; only the ownership proof differs.
+- **Renewal:** certbot's systemd timer renews automatically, using the same method. A deploy hook restarts nginx to load the new certificate. Port 80 keeps serving `/.well-known/acme-challenge/` unredirected so renewals work. **Verified** with `certbot renew --dry-run`.
+- **Staging first:** `letsencrypt_staging = true` uses Let's Encrypt's test CA (untrusted, no rate limits). Staging and production certificates have different names, so turning staging off really requests a trusted one.
+
+### 7. Credentials and secrets hygiene
 - **No passwords on servers:** the frontend gets AWS permissions from an **IAM instance role** (`r53-devops`), not stored keys.
 - **IMDSv2 required on both servers** (`metadata_options { http_tokens = "required" }`).
   - **Why:** the instance role's credentials can only be fetched with a session token obtained by a `PUT` request. An SSRF bug, which can usually only make plain `GET` requests, gets `401 Unauthorized` instead of the AWS keys.
@@ -169,6 +185,7 @@ RTMP (1935) and the RTMP control endpoint (8080) are **not reachable over the ne
 | Bypassing the tunnel | Firewall blocks 1935; nginx denies non-tunnel publishers |
 | Takeover through the RTMP control API | Port 8080 not reachable from the network |
 | Theft of instance-role credentials through SSRF | IMDSv2 required (plain GET → 401) |
+| Eavesdropping or tampering between viewers and the site | HTTPS (trusted Let's Encrypt certificate), TLS 1.2+, HSTS, HTTP→HTTPS redirect |
 | Leaked disk snapshot or copied volume | Disks encrypted with a customer-managed KMS key |
 | Secrets leaking through git or logs | Git-ignored state and keys; key-free log formats; root-only files; gitleaks in CI + pre-commit |
 | Malware calling out on arbitrary ports | Outbound security-group rules limited to 80/443 (+ SSH/WireGuard inside the VPC) |
@@ -217,7 +234,7 @@ pip install pre-commit && pre-commit install
 **Accepted** (skipped inline next to the resource, with the reason):
 | Check | Resource | Reason |
 |---|---|---|
-| `CKV_AWS_260` | Frontend SG | Public website: port 80 must be open; HTTPS is blocked by the lab's IAM policy |
+| `CKV_AWS_260` | Frontend SG | Port 80 must stay open: it redirects to HTTPS and serves Let's Encrypt HTTP-01 challenges |
 | `CKV_AWS_88` | Frontend | It's the public web server, so it needs a public IP |
 | `CKV2_AWS_41` | Streamer | It needs no AWS access; a role would *add* privilege |
 | `CKV_AWS_126` ×2 | Both servers | Detailed monitoring is a paid feature not needed here |
@@ -241,7 +258,7 @@ gitleaks detect --source . --redact
 - **AWS CLI v2**, logged in: `aws sso login`.
 - **Terraform** ≥ 1.5.
 - **Ansible** (developed and tested with ansible-core 2.17).
-- Optional: a Route 53 hosted zone, plus an instance profile allowed to write to it (for HTTPS).
+- For HTTPS: a Route 53 hosted zone. HTTP-01 needs nothing else; DNS-01 also needs an instance profile allowed to write to the zone.
 
 ## Usage
 
@@ -257,7 +274,7 @@ After about 3–5 minutes:
 ```
 frontend_fqdn      = "bahey.devops.gin-telecom.ovh"
 frontend_public_ip = "x.x.x.x"
-stream_url         = "http://bahey.devops.gin-telecom.ovh/"
+stream_url         = "https://bahey.devops.gin-telecom.ovh/"
 ssh_frontend       = "ssh -i ./mss-key.pem ubuntu@x.x.x.x"
 stream_key         = <sensitive>
 ```
@@ -360,16 +377,17 @@ mss-project/
 | `admin_cidr` | auto-detected | CIDR allowed to SSH to the frontend |
 | `instance_type` | `t3.micro` | Instance size for both servers |
 | `frontend_instance_profile` | `r53-devops` | Existing instance profile with Route 53 permissions |
-| `enable_tls` | `false` | Request a Let's Encrypt certificate and serve HTTPS |
+| `enable_tls` | `false` | Request a Let's Encrypt certificate and serve HTTPS (`true` in this deployment) |
+| `acme_challenge` | `"dns"` | Ownership proof: `"dns"` (DNS-01 via Route 53) or `"http"` (HTTP-01 via port 80; used here) |
 | `letsencrypt_staging` | `false` | Use Let's Encrypt's staging CA (no rate limits, untrusted certificates) |
 
 ---
 
 ## Known limitations
-- **HTTPS is blocked by a lab-side permission.**
-  - **The problem:** the `r53-devops` role's policy (`Letsencrypt-devops.intuitivesoft.cloud`) only allows `route53:ChangeResourceRecordSets` on two hosted zones that no longer exist. A certbot dry run fails with `AccessDenied` on `Z0316326GXOE1JMI1YJX`.
-  - **What's ready:** the TLS code path (certbot DNS-01, HTTPS server block, HTTP→HTTPS redirect) is implemented.
-  - **To enable it:** once the policy includes the zone, set `enable_tls = true` and run `terraform apply`.
+- **DNS-01 is blocked by a lab-side permission, so HTTPS uses HTTP-01.**
+  - **The problem:** the `r53-devops` role's policy (`Letsencrypt-devops.intuitivesoft.cloud`, still v3) only allows `route53:ChangeResourceRecordSets` on two hosted zones that no longer exist. A certbot dry run fails with `AccessDenied` on `Z0316326GXOE1JMI1YJX`.
+  - **Workaround in use:** `acme_challenge = "http"` (HTTP-01). It needs no AWS permissions, and the certificate is the same.
+  - **To switch to the lab design:** once the policy includes the zone, set `acme_challenge = "dns"` and run `terraform apply`.
 - **The lab account can't create IAM roles**, so the frontend uses the lab-provided instance profile.
 - **The frontend is a single point of failure**: it's both the web server and the streamer's NAT, so if it's down, the streamer loses internet access too.
 - **The public IP changes on every restart.** DNS uses a 60 s TTL and is updated on each `apply`.
