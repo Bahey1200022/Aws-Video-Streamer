@@ -242,6 +242,39 @@ pip install pre-commit && pre-commit install
 | `CKV2_AWS_23` | DNS record | False positive: the IP comes from a data source Checkov can't follow |
 | ansible-lint `run-once` | Video download | Safe with the default `linear` strategy; downloading once is the intent |
 
+### How the checks turn green or red
+GitHub runs any workflow in `.github/workflows/` automatically; nothing needs configuring on the website.
+1. **Each job gets a fresh Ubuntu machine** (a "runner"). The 4 jobs run in parallel, and each machine is discarded afterwards.
+2. **Each job is a list of steps:**
+   - `uses:` runs a ready-made action, pinned to a commit SHA;
+   - `run:` runs a shell command.
+3. **Each command's exit code decides the outcome:** `0` is ✅, anything else is ❌ and stops the job. The scanners are built for this:
+
+| Command | Exits non-zero when |
+|---|---|
+| `checkov` | any check fails |
+| `gitleaks detect` | any secret is found |
+| `ansible-lint` | any rule is violated |
+| `terraform fmt -check` / `validate` | the code is badly formatted or invalid |
+| `sha256sum --check` | the downloaded gitleaks binary doesn't match its checksum |
+
+The result is attached to the commit as a **status check**: ✅/❌ next to the commit, the full logs in the **Actions** tab, and "All checks have passed" (or not) on pull requests.
+
+### Proof: the pipeline catches a misconfiguration
+On a throwaway branch, the admin SSH rule in `security.tf` was changed from "my IP only" to `0.0.0.0/0`, a realistic debugging mistake, and pushed:
+
+| Job | Result |
+|---|---|
+| Terraform fmt + validate | ✅ (the code is valid, just insecure) |
+| **Checkov** | ❌ `CKV_AWS_24: "Ensure no security groups allow ingress from 0.0.0.0:0 to port 22"` FAILED for `aws_security_group.frontend` (`security.tf`) |
+| gitleaks | ✅ |
+| ansible-lint | ✅ |
+
+The **pre-commit hook** also ran on that commit (`Detect hardcoded secrets … Passed`), showing the local check before anything reached GitHub. The branch was then deleted; the change was never applied to AWS.
+
+### Making the checks mandatory (recommended)
+A red check is only a warning unless GitHub enforces it. To **block merging into `main` unless all 4 jobs pass**: GitHub → **Settings** → **Rules → Rulesets** (or **Branches**) → new rule for `main` → **Require status checks to pass** → select the 4 jobs. This is the "CD gate" from shift-left practice: a misconfiguration like the demo above can't reach `main`.
+
 ### Running the scanners locally
 ```bash
 checkov -d terraform --framework terraform --compact
@@ -321,6 +354,19 @@ sudo wg show wg0                                  # recent handshake, growing tr
 sudo timeout 10 tcpdump -ni ens5 host <streamer_private_ip> and not port 22
 # Inside the tunnel (on this server only): the RTMP stream
 sudo timeout 10 tcpdump -ni wg0
+```
+
+**HTTPS: trusted certificate, redirect, TLS versions, renewal.** Run these from your laptop, except the last:
+```bash
+H=bahey.devops.gin-telecom.ovh
+echo | openssl s_client -connect $H:443 -servername $H 2>/dev/null | openssl x509 -noout -issuer -enddate
+#   → issuer: Let's Encrypt; the expiry date
+curl -s -o /dev/null -w "%{http_code} verify=%{ssl_verify_result}\n" https://$H/   # → 200 verify=0 (trusted)
+curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" http://$H/              # → 301 https://…
+curl -sI https://$H/ | grep -i strict-transport                                   # → max-age=86400
+echo | openssl s_client -connect $H:443 -tls1_1 2>&1 | grep -q "BEGIN CERT" && echo "TLS 1.1 accepted" || echo "TLS 1.1 refused"
+# on the frontend:
+sudo certbot renew --dry-run                      # → "all simulated renewals succeeded"
 ```
 
 **Firewall: RTMP isn't reachable over the VPC.** Run this on the streamer:
