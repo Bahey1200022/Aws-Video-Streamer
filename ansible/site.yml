@@ -182,7 +182,9 @@
         mode: "0644"
       delegate_to: localhost
       become: false
-      run_once: true
+      # Download once for all streamers. Safe with the default "linear"
+      # strategy this playbook uses (ansible-lint warns about "free")
+      run_once: true # noqa: run-once[task]
 
     - name: Upload video to the streamer
       ansible.builtin.copy:

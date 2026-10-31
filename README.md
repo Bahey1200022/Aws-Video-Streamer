@@ -17,6 +17,7 @@ to browsers.
 - [Architecture](#architecture)
 - [Features](#features)
 - [Security features](#security-features)
+- [Security pipeline (shift-left)](#security-pipeline-shift-left)
 - [Prerequisites](#prerequisites)
 - [Usage](#usage)
 - [Verifying the security features](#verifying-the-security-features)
@@ -103,6 +104,17 @@ to browsers.
 | Frontend | TCP 80, 443 | Private subnet only (streamer traffic passing through the NAT) |
 | Streamer | TCP 22 | Frontend security group only (jump host) |
 
+**Outbound traffic is restricted too**, so a compromised process can't "phone home" on arbitrary ports:
+
+| Server | Allowed out | To |
+|---|---|---|
+| Frontend | TCP 80, 443 | Internet (apt, Let's Encrypt, and the streamer's NAT traffic) |
+| Frontend | TCP 22 | Private subnet (Ansible jump to the streamer) |
+| Streamer | UDP 51820 | Public subnet (WireGuard to the frontend) |
+| Streamer | TCP 80, 443 | Internet, through the frontend NAT (apt) |
+
+Amazon DNS, NTP and the metadata service aren't filtered by security groups. **Verified:** apt, DNS, NTP, the tunnel and the stream work, while outbound ports 25, 8080 and 6667 are blocked from both servers.
+
 RTMP (1935) and the RTMP control endpoint (8080) are **not reachable over the network**.
 
 ### 3. Authenticated publishing (stream key)
@@ -135,7 +147,8 @@ RTMP (1935) and the RTMP control endpoint (8080) are **not reachable over the ne
 - **Settings:** automatic yearly key rotation, and a 7-day recovery window if the key is deleted.
 - **Protects against** leaked snapshots, copied volumes and decommissioned hardware: without permission on the key, a disk copy is unreadable.
 - **Doesn't protect** a running server, where the disk is transparently unlocked, or the Terraform state on the control machine.
-- **Lab caveat:** the default key policy delegates to IAM, and every student shares the same `DevopsLab` role. A key policy restricted to a specific SSO session would be needed to keep classmates out.
+- **Key policy written in code** ([kms.tf](terraform/kms.tf)): the account administers the key, and IAM decides who may use it. That's the same access as AWS's default, but visible and reviewable.
+- **Lab caveat:** this policy delegates to IAM, and every student shares the same `DevopsLab` role. A key policy restricted to a specific SSO session would be needed to keep classmates out.
 
 ### 6. Credentials and secrets hygiene
 - **No passwords on servers:** the frontend gets AWS permissions from an **IAM instance role** (`r53-devops`), not stored keys.
@@ -157,7 +170,67 @@ RTMP (1935) and the RTMP control endpoint (8080) are **not reachable over the ne
 | Takeover through the RTMP control API | Port 8080 not reachable from the network |
 | Theft of instance-role credentials through SSRF | IMDSv2 required (plain GET → 401) |
 | Leaked disk snapshot or copied volume | Disks encrypted with a customer-managed KMS key |
-| Secrets leaking through git or logs | Git-ignored state and keys; key-free log formats; root-only files |
+| Secrets leaking through git or logs | Git-ignored state and keys; key-free log formats; root-only files; gitleaks in CI + pre-commit |
+| Malware calling out on arbitrary ports | Outbound security-group rules limited to 80/443 (+ SSH/WireGuard inside the VPC) |
+| Insecure infrastructure changes slipping in | Checkov + Terraform validation on every push |
+
+---
+
+## Security pipeline (shift-left)
+
+Every push and pull request runs [.github/workflows/security.yml](.github/workflows/security.yml) on GitHub Actions. It only **reads** the code: no AWS credentials, and the workflow token is read-only.
+
+```
+git push ─┬─▶ Terraform    fmt -check + validate       (well-formed?)
+          ├─▶ Checkov      terraform/ + the workflow   (insecure cloud config?)
+          ├─▶ gitleaks     every commit in history     (secrets ever committed?)
+          └─▶ ansible-lint production profile          (risky playbook patterns?)
+                → ✅ green, or ❌ red with the exact file and line
+```
+
+**The pipeline is hardened as well:**
+- **Read-only token:** `permissions: contents: read`.
+- **Actions pinned to commit SHAs**, not tags. A tag can be moved to different code; a SHA can't.
+- **Tool versions pinned**, each at least two weeks old when chosen: Terraform 1.16.6, Checkov 3.3.29, ansible-lint 26.10.1, gitleaks 8.18.4.
+- **The gitleaks download is checksum-verified** before it runs.
+- **Checkov also scans the workflow itself:** 88/88 checks passed.
+
+**Further left, on your laptop:** [.pre-commit-config.yaml](.pre-commit-config.yaml) runs gitleaks on staged changes before a commit is even created. Setup, once:
+```bash
+pip install pre-commit && pre-commit install
+```
+
+### Baseline and triage
+| Tool | Before | After |
+|---|---|---|
+| gitleaks | 7 commits, **no leaks** | Unchanged |
+| ansible-lint | 1 finding (`run-once`) | **Passes** the `production` profile |
+| Checkov (Terraform) | 25 passed, **13 failed** | **30 passed, 0 failed**, 8 skipped with reasons |
+
+**Fixed:**
+| Check | Fix |
+|---|---|
+| `CKV_AWS_382` ×2: egress to anywhere on any port | Outbound limited to the ports listed above, a new security control |
+| `CKV_AWS_23` ×2: security-group rules without descriptions | Descriptions added |
+| `CKV2_AWS_64`: KMS key policy not defined | Explicit key policy in `kms.tf` |
+
+**Accepted** (skipped inline next to the resource, with the reason):
+| Check | Resource | Reason |
+|---|---|---|
+| `CKV_AWS_260` | Frontend SG | Public website: port 80 must be open; HTTPS is blocked by the lab's IAM policy |
+| `CKV_AWS_88` | Frontend | It's the public web server, so it needs a public IP |
+| `CKV2_AWS_41` | Streamer | It needs no AWS access; a role would *add* privilege |
+| `CKV_AWS_126` ×2 | Both servers | Detailed monitoring is a paid feature not needed here |
+| `CKV_AWS_135` ×2 | Both servers | t3 is EBS-optimized by default; setting the flag forces a stop/start |
+| `CKV2_AWS_23` | DNS record | False positive: the IP comes from a data source Checkov can't follow |
+| ansible-lint `run-once` | Video download | Safe with the default `linear` strategy; downloading once is the intent |
+
+### Running the scanners locally
+```bash
+checkov -d terraform --framework terraform --compact
+(cd ansible && ansible-lint --offline site.yml)
+gitleaks detect --source . --redact
+```
 
 ---
 
@@ -245,6 +318,8 @@ nc -zv -w 5 <frontend_private_ip> 1935            # → timed out
 ```
 mss-project/
 ├── README.md
+├── .github/workflows/security.yml  Security pipeline (Terraform, Checkov, gitleaks, ansible-lint)
+├── .pre-commit-config.yaml         gitleaks before each local commit
 ├── terraform/                      Infrastructure + orchestration
 │   ├── versions.tf                 Providers (aws, tls, local, http, random)
 │   ├── variables.tf                Inputs
@@ -261,6 +336,7 @@ mss-project/
 │   └── outputs.tf                  IPs, URLs, SSH command, stream key (sensitive)
 └── ansible/                        Server configuration
     ├── ansible.cfg
+    ├── .ansible-lint               ansible-lint settings (production profile)
     ├── site.yml                    Plays: WireGuard keys → Web Frontend → Video Streamer
     ├── group_vars/all.yml          Tunnel addressing and port
     └── templates/
