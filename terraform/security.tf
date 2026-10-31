@@ -1,4 +1,5 @@
 resource "aws_security_group" "frontend" {
+  # checkov:skip=CKV_AWS_260: public website - port 80 must be open to everyone (HTTPS is blocked by the lab's IAM policy, see README)
   name        = "mss-frontend"
   description = "Web frontend"
   vpc_id      = data.aws_vpc.main.id
@@ -53,11 +54,31 @@ resource "aws_security_group" "frontend" {
     cidr_blocks = [local.admin_cidr]
   }
 
+  # Egress is limited to what the frontend needs, so a compromised process
+  # can't reach out on arbitrary ports. Amazon DNS, NTP and the metadata
+  # service are not filtered by security groups.
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    description = "HTTP out: apt, plus forwarded (NAT) traffic of the streamer"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "HTTPS out: apt, Lets Encrypt, plus forwarded (NAT) traffic of the streamer"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "SSH to the streamer (Ansible jump host)"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [data.aws_subnet.private.cidr_block]
   }
 }
 
@@ -75,9 +96,26 @@ resource "aws_security_group" "streamer" {
   }
 
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    description = "WireGuard tunnel to the frontend"
+    from_port   = 51820
+    to_port     = 51820
+    protocol    = "udp"
+    cidr_blocks = [data.aws_subnet.public.cidr_block]
+  }
+
+  egress {
+    description = "HTTP out via the frontend NAT (apt)"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "HTTPS out via the frontend NAT (apt)"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 }

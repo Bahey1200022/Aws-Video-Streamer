@@ -25,6 +25,9 @@ resource "local_sensitive_file" "ssh_private_key" {
 }
 
 resource "aws_instance" "frontend" {
+  # checkov:skip=CKV_AWS_88: the frontend is the public web server, so it needs a public IP by design
+  # checkov:skip=CKV_AWS_126: detailed (1-minute) monitoring is a paid CloudWatch feature not needed for this lab
+  # checkov:skip=CKV_AWS_135: t3 instances are EBS-optimized by default (Nitro); setting the flag forces a stop/start
   ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type
   subnet_id              = data.aws_subnet.public.id
@@ -65,6 +68,9 @@ resource "aws_instance" "frontend" {
 }
 
 resource "aws_instance" "streamer" {
+  # checkov:skip=CKV2_AWS_41: the streamer needs no AWS API access - attaching a role would add privilege (least privilege)
+  # checkov:skip=CKV_AWS_126: detailed (1-minute) monitoring is a paid CloudWatch feature not needed for this lab
+  # checkov:skip=CKV_AWS_135: t3 instances are EBS-optimized by default (Nitro); setting the flag forces a stop/start
   ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type
   subnet_id              = data.aws_subnet.private.id
@@ -114,6 +120,7 @@ locals {
 }
 
 resource "aws_route53_record" "frontend" {
+  # checkov:skip=CKV2_AWS_23: false positive - the record points to the frontend's IP, read through a data source Checkov can't follow
   count   = local.dns_enabled ? 1 : 0
   zone_id = data.aws_route53_zone.main[0].zone_id
   name    = "${var.frontend_hostname}.${var.domain_name}"

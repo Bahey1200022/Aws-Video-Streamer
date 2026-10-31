@@ -1,0 +1,89 @@
+# Shift-left security pipeline: every push and pull request is scanned before
+# anything is deployed. No AWS credentials are used - it only reads the code.
+name: Security pipeline
+
+on:
+  push:
+  pull_request:
+
+# Least privilege for the workflow token: read the repository, nothing else
+permissions:
+  contents: read
+
+# Tool versions are pinned (and at least two weeks old when chosen) so the
+# pipeline can't change underneath us; actions are pinned to commit SHAs
+# because a tag can be moved to different code.
+env:
+  TERRAFORM_VERSION: "1.16.6"
+  CHECKOV_VERSION: "3.3.29"
+  ANSIBLE_LINT_VERSION: "26.10.1"
+  GITLEAKS_VERSION: "8.18.4"
+  GITLEAKS_SHA256: "ba6dbb656933921c775ee5a2d1c13a91046e7952e9d919f9bac4cec61d628e7d"
+
+jobs:
+  terraform:
+    name: Terraform fmt + validate
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Formatting
+        run: terraform fmt -check -recursive
+      - name: Init (no backend, no AWS access)
+        run: terraform init -backend=false -input=false
+      - name: Validate
+        run: terraform validate
+
+  checkov:
+    name: Checkov (IaC security)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: "3.12"
+      - name: Install Checkov
+        run: pip install "checkov==${CHECKOV_VERSION}"
+      - name: Scan Terraform
+        # Fails on any finding; accepted risks are skipped inline with a reason
+        run: checkov -d terraform --framework terraform --compact
+      - name: Scan this workflow
+        run: checkov -d .github/workflows --framework github_actions --compact
+
+  gitleaks:
+    name: gitleaks (secrets in git history)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0 # full history: a secret deleted later is still in old commits
+      - name: Install gitleaks (checksum verified)
+        run: |
+          curl -sSfL -o gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum --check
+          tar xzf gitleaks.tgz gitleaks
+      - name: Scan all commits
+        run: ./gitleaks detect --source . --redact --no-banner --verbose
+
+  ansible-lint:
+    name: ansible-lint
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: "3.12"
+      - name: Install ansible-lint
+        run: pip install "ansible-lint==${ANSIBLE_LINT_VERSION}"
+      - name: Lint playbook (production profile)
+        run: ansible-lint --offline site.yml
