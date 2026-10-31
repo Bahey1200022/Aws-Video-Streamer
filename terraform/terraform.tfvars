@@ -10,3 +10,7 @@ frontend_hostname = "bahey"
 enable_tls          = true
 acme_challenge      = "http"
 letsencrypt_staging = false
+
+# IP camera: the phone pushes RTMPS (e.g. Larix Broadcaster) to port 1936.
+# Get the URL with: terraform output -raw camera_publish_url
+camera_enabled = true

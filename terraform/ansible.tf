@@ -11,17 +11,20 @@ locals {
 resource "local_file" "inventory" {
   filename = "${local.ansible_dir}/inventory.yml"
   content = templatefile("${path.module}/inventory.yml.tftpl", {
-    key_file            = abspath(local_sensitive_file.ssh_private_key.filename)
-    fqdn                = local.dns_enabled ? "${var.frontend_hostname}.${var.domain_name}" : "_"
-    private_cidr        = data.aws_subnet.private.cidr_block
-    vpc_cidr            = data.aws_vpc.main.cidr_block
-    frontend_private_ip = aws_instance.frontend.private_ip
-    frontend_public_ip  = local.frontend_public_ip
-    streamer_private_ip = aws_instance.streamer.private_ip
-    enable_tls          = var.enable_tls && local.dns_enabled
-    letsencrypt_staging = var.letsencrypt_staging
-    acme_challenge      = var.acme_challenge
-    stream_key          = random_password.stream_key.result
+    key_file             = abspath(local_sensitive_file.ssh_private_key.filename)
+    fqdn                 = local.dns_enabled ? "${var.frontend_hostname}.${var.domain_name}" : "_"
+    private_cidr         = data.aws_subnet.private.cidr_block
+    vpc_cidr             = data.aws_vpc.main.cidr_block
+    frontend_private_ip  = aws_instance.frontend.private_ip
+    frontend_public_ip   = local.frontend_public_ip
+    streamer_private_ip  = aws_instance.streamer.private_ip
+    enable_tls           = var.enable_tls && local.dns_enabled
+    letsencrypt_staging  = var.letsencrypt_staging
+    acme_challenge       = var.acme_challenge
+    camera_enabled       = var.camera_enabled
+    camera_key           = random_password.camera_key.result
+    camera_view_password = random_password.camera_view.result
+    stream_key           = random_password.stream_key.result
   })
 }
 

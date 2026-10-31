@@ -20,6 +20,20 @@ resource "aws_security_group" "frontend" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # Camera ingest: the phone pushes RTMP over TLS from any network (its public
+  # IP changes constantly on mobile data). Only the "camera" channel with its
+  # key is accepted; TLS uses the site's Let's Encrypt certificate.
+  dynamic "ingress" {
+    for_each = var.camera_enabled ? [1] : []
+    content {
+      description = "RTMPS camera ingest (TLS, camera stream key required)"
+      from_port   = 1936
+      to_port     = 1936
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  }
+
   ingress {
     description = "WireGuard tunnel from the streamer (carries the RTMP ingest)"
     from_port   = 51820

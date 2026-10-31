@@ -100,6 +100,7 @@ to browsers.
 |---|---|---|
 | Frontend | TCP 80, 443 | Anywhere (viewers) |
 | Frontend | TCP 22 | **Your current public IP only** (auto-detected) |
+| Frontend | TCP 1936 | Anywhere, **only when `camera_enabled`** (RTMPS camera ingest: TLS + camera key) |
 | Frontend | UDP 51820 | Private subnet only (WireGuard) |
 | Frontend | TCP 80, 443 | Private subnet only (streamer traffic passing through the NAT) |
 | Streamer | TCP 22 | Frontend security group only (jump host) |
@@ -166,7 +167,72 @@ RTMP (1935) and the RTMP control endpoint (8080) are **not reachable over the ne
 - **Renewal:** certbot's systemd timer renews automatically, using the same method. A deploy hook restarts nginx to load the new certificate. Port 80 keeps serving `/.well-known/acme-challenge/` unredirected so renewals work. **Verified** with `certbot renew --dry-run`.
 - **Staging first:** `letsencrypt_staging = true` uses Let's Encrypt's test CA (untrusted, no rate limits). Staging and production certificates have different names, so turning staging off really requests a trusted one.
 
-### 7. Credentials and secrets hygiene
+### 7. Live camera (phone pushing RTMPS)
+A phone, or any camera app able to stream RTMPS, can be added as a second, **private** channel. Viewers pick it with the **Camera 🔒** tab on the player.
+
+```
+Phone (Larix Broadcaster)                         Web Frontend
+  hardware H.264 encoding     ──RTMPS :1936──▶  nginx stream: TLS (Let's Encrypt cert), max 2 conns/IP
+  pushes OUT (any network,     TLS + camera key     └─▶ 127.0.0.1:1937 camera-only RTMP server
+  no open port on the phone)                              accepts only "camera" + its key, no RTMP playback
+                                                         └─▶ HLS/DASH ──▶ /camera/ (HTTPS + login)
+```
+
+| Threat | Control |
+|---|---|
+| Video or key sniffed on the way (public Wi-Fi, mobile network) | **RTMPS**: TLS 1.2/1.3 with the site's Let's Encrypt certificate |
+| Someone else publishing a fake camera feed | Per-camera **stream key** (Terraform-generated, rotatable): `terraform apply -replace=random_password.camera_key` |
+| Using the camera port to hijack the main stream | The ingest is a **separate RTMP server** that only accepts the `camera` channel. The main stream is refused even with its real key. |
+| Watching the camera over RTMP, bypassing the login | `deny play all` on the camera ingest |
+| Anyone watching a private space | `/camera/`, `/hls/camera…`, `/dash/camera…` need a login (`viewer` + a Terraform-generated password), over HTTPS. The raw chunk folders (`/stream/…`) are never served. |
+| Brute force / abuse of the ingest port | At most 2 connections per IP; every connection logged (`rtmps-access.log`) |
+| Camera exposed to the internet (the Mirai / Shodan problem) | **Nothing listens on the phone.** It only connects out. |
+| Ingest without encryption | Ansible refuses `camera_enabled` without `enable_tls`, and the port only opens when the camera is enabled |
+
+**Verified** (every attempt completed the TLS handshake, then was refused at the RTMP level):
+
+| Test | Result |
+|---|---|
+| Correct camera key over RTMPS | Accepted; HLS chunks created |
+| Wrong camera key | Rejected |
+| Main stream published through port 1936 **with its real key** | Rejected |
+| RTMP playback of the camera on 1936 | Denied |
+| Internal port 1937 from the internet | Closed |
+| Camera playlist without login / raw camera folder | `401` / `404` |
+
+**Design history: the first approach was replaced.** The camera was first **pulled** by the server through a WireGuard tunnel to the phone (IP Webcam + the WireGuard app). It worked briefly, then failed in practice:
+- **On mobile data, carrier-grade NAT** changed the phone's public address and port every few seconds.
+- **Android power management** kept shutting the VPN down.
+- It also required an **open RTSP server on the phone**.
+
+Moving to **push over TLS**, which is how YouTube and Twitch ingest works, removed all three problems and the phone-side server.
+
+**Setup on the phone (Larix Broadcaster):**
+1. On the laptop: `terraform output -raw camera_publish_url` → `rtmps://<fqdn>:1936/live/camera?key=…`
+2. In Larix: Settings → Connections → **New connection** → paste the URL → save, then tap the record button to go live.
+3. Watch at `https://<fqdn>/camera/` (user `viewer`, password: `terraform output -raw camera_view_password`).
+
+*Note:* Ubuntu 22.04's ffmpeg 4.4 (GnuTLS) fails the TLS 1.3 handshake with "Error in the pull function". Use a phone app, or a newer ffmpeg, to test from a laptop.
+
+**Alternative: an IP camera (RTSP) through a local relay.** Most IP cameras, and the *IP Webcam* app, only serve **RTSP**. Exposing them to the internet is the classic IoT mistake, so a relay on the **same local network** pulls the stream and pushes it out over RTMPS:
+
+```
+IP camera / IP Webcam (RTSP, local only) ──LAN──▶ relay (laptop / Raspberry Pi) ──RTMPS (TLS)──▶ /camera/
+```
+```bash
+scripts/camera-relay.sh     # asks for the camera IP, port, path, username and password
+```
+- **The camera password is asked at start-up** and kept in memory only: not written to disk, not sent to AWS. The server only ever receives the RTMPS stream with the camera key.
+- **Refuses a public camera address:** the camera must be on the local network, never exposed to the internet.
+- **Checks the camera first** with `ffprobe` (codec, resolution), then copies the video without re-encoding, and **reconnects automatically**.
+- **Runs ffmpeg 7.1 in Docker, pinned by digest**, which avoids the TLS 1.3 bug in Ubuntu 22.04's ffmpeg.
+- **Caveats:**
+  - the camera and the relay must be on the same network (campus Wi-Fi isolates devices; home Wi-Fi or a phone hotspot works);
+  - the RTSP credentials are visible in the relay's local process list, an ffmpeg limitation, so run the relay on a trusted machine.
+
+**Hardening a real IP camera:** change the default password; update the firmware; turn off P2P/cloud, UPnP and unused services (Telnet, FTP); never port-forward it; put it on a separate network (guest Wi-Fi / VLAN) with no internet access, so only the relay can reach it.
+
+### 8. Credentials and secrets hygiene
 - **No passwords on servers:** the frontend gets AWS permissions from an **IAM instance role** (`r53-devops`), not stored keys.
 - **IMDSv2 required on both servers** (`metadata_options { http_tokens = "required" }`).
   - **Why:** the instance role's credentials can only be fetched with a session token obtained by a `PUT` request. An SSRF bug, which can usually only make plain `GET` requests, gets `401 Unauthorized` instead of the AWS keys.
@@ -190,6 +256,7 @@ RTMP (1935) and the RTMP control endpoint (8080) are **not reachable over the ne
 | Secrets leaking through git or logs | Git-ignored state and keys; key-free log formats; root-only files; gitleaks in CI + pre-commit |
 | Malware calling out on arbitrary ports | Outbound security-group rules limited to 80/443 (+ SSH/WireGuard inside the VPC) |
 | Insecure infrastructure changes slipping in | Checkov + Terraform validation on every push |
+| Camera feed sniffed, faked, or watched without permission | RTMPS (TLS), per-camera key, camera-only ingest with no RTMP playback, login-protected viewing |
 
 ---
 
@@ -319,10 +386,13 @@ Open `stream_url` in a browser. The video autoplays muted.
 | `/` | Player page |
 | `/hls/stream.m3u8` | HLS playlist (also playable in VLC) |
 | `/dash/stream.mpd` | DASH manifest |
+| `/camera/` | Live camera (login required), when `camera_enabled` |
 
 ### Common commands
 ```bash
 terraform output -raw stream_key                     # show the stream key
+terraform output -raw camera_publish_url             # URL for the camera app (contains its key)
+terraform output -raw camera_view_password           # camera page login (user: viewer)
 terraform apply -replace=random_password.stream_key  # rotate the stream key
 ssh -i mss-key.pem ubuntu@$(terraform output -raw frontend_public_ip)
 terraform destroy                                    # delete everything
@@ -383,6 +453,7 @@ mss-project/
 ├── README.md
 ├── .github/workflows/security.yml  Security pipeline (Terraform, Checkov, gitleaks, ansible-lint)
 ├── .pre-commit-config.yaml         gitleaks before each local commit
+├── scripts/camera-relay.sh         IP camera (RTSP) → RTMPS relay, run on the camera's local network
 ├── terraform/                      Infrastructure + orchestration
 │   ├── versions.tf                 Providers (aws, tls, local, http, random)
 │   ├── variables.tf                Inputs
@@ -394,6 +465,7 @@ mss-project/
 │   ├── nat.sh                      Boot script: turns the frontend into a NAT (systemd unit)
 │   ├── stream_key.tf               Stream key generation
 │   ├── kms.tf                      Customer-managed KMS key for disk encryption
+│   ├── camera.tf                   Camera stream key + viewer password
 │   ├── ansible.tf                  Generates the inventory and runs the playbook
 │   ├── inventory.yml.tftpl         Inventory template
 │   └── outputs.tf                  IPs, URLs, SSH command, stream key (sensitive)
@@ -425,6 +497,7 @@ mss-project/
 | `frontend_instance_profile` | `r53-devops` | Existing instance profile with Route 53 permissions |
 | `enable_tls` | `false` | Request a Let's Encrypt certificate and serve HTTPS (`true` in this deployment) |
 | `acme_challenge` | `"dns"` | Ownership proof: `"dns"` (DNS-01 via Route 53) or `"http"` (HTTP-01 via port 80; used here) |
+| `camera_enabled` | `false` | RTMPS camera ingest on port 1936 + the login-protected camera channel (requires `enable_tls`) |
 | `letsencrypt_staging` | `false` | Use Let's Encrypt's staging CA (no rate limits, untrusted certificates) |
 
 ---

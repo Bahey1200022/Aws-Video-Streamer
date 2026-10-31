@@ -2,3 +2,5 @@
 *.tfstate
 *.tfstate.*
 *.pem
+# Local secrets (e.g. the camera app password)
+secrets.auto.tfvars

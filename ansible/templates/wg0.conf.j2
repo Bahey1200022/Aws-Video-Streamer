@@ -7,11 +7,14 @@ ListenPort = {{ wg_port }}
 # The private key never leaves this host: it is generated here and loaded
 # from disk, so it is not part of this file or of any Ansible variable
 PostUp = wg set %i private-key /etc/wireguard/private.key
+{% for peer in wg_peers %}
 
+# {{ peer.name }}
 [Peer]
-PublicKey = {{ wg_peer_public_key }}
-AllowedIPs = {{ wg_peer_ip }}/32
-{% if wg_peer_endpoint %}
-Endpoint = {{ wg_peer_endpoint }}
+PublicKey = {{ peer.public_key }}
+AllowedIPs = {{ peer.ip }}/32
+{% if peer.endpoint | default('') %}
+Endpoint = {{ peer.endpoint }}
 PersistentKeepalive = 25
 {% endif %}
+{% endfor %}

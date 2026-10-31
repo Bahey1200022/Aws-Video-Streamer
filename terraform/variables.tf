@@ -75,3 +75,10 @@ variable "letsencrypt_staging" {
   type        = bool
   default     = false
 }
+
+# ---- IP camera (phone pushing RTMPS, e.g. Larix Broadcaster) ----
+variable "camera_enabled" {
+  description = "Accept a camera pushing RTMPS on port 1936 and publish it as the password-protected 'camera' channel (needs enable_tls)"
+  type        = bool
+  default     = false
+}

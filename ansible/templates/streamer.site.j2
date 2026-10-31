@@ -39,6 +39,40 @@ server {
     root /var/www/html;
     index index.html;
 
+    # The web root contains the raw chunk folders (/var/www/html/stream/...).
+    # Never serve them directly: protected channels would bypass their login.
+    location ^~ /stream/ {
+        return 404;
+    }
+
+{% if camera_enabled | bool %}
+    # Camera channel: a private space, so viewing needs a login (over HTTPS)
+    location ^~ /camera/ {
+        auth_basic "Camera";
+        auth_basic_user_file /etc/nginx/camera.htpasswd;
+    }
+
+    # Camera chunks live in their own folders (nginx-rtmp can't share one):
+    # /hls/camera.m3u8 -> /var/www/html/stream/camera-hls/camera.m3u8
+    location ^~ /hls/camera {
+        auth_basic "Camera";
+        auth_basic_user_file /etc/nginx/camera.htpasswd;
+        add_header Cache-Control no-cache;
+        alias /var/www/html/stream/camera-hls/camera;
+    }
+
+    location ^~ /dash/camera {
+        auth_basic "Camera";
+        auth_basic_user_file /etc/nginx/camera.htpasswd;
+        add_header Cache-Control no-cache;
+        types {
+            application/dash+xml mpd;
+            video/mp4 mp4 m4v m4a;
+        }
+        alias /var/www/html/stream/camera-dash/camera;
+    }
+
+{% endif %}
     location /hls {
         add_header Access-Control-Allow-Origin *;
         root /var/www/html/stream;

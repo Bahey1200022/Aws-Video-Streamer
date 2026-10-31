@@ -52,9 +52,10 @@
       vars:
         wg_address: "{{ wg_frontend_ip }}"
         wg_listen: true
-        wg_peer_public_key: "{{ hostvars['video-streamer'].wg_public_key }}"
-        wg_peer_ip: "{{ wg_streamer_ip }}"
-        wg_peer_endpoint: ""
+        wg_peers:
+          - name: Video Streamer
+            public_key: "{{ hostvars['video-streamer'].wg_public_key }}"
+            ip: "{{ wg_streamer_ip }}"
       notify: Restart WireGuard
 
     - name: Start WireGuard tunnel
@@ -74,6 +75,8 @@
         - /var/www/html/stream
         - /var/www/html/stream/hls
         - /var/www/html/stream/dash
+        - /var/www/html/stream/camera-hls
+        - /var/www/html/stream/camera-dash
 
     - name: Install certbot (+ Route 53 plugin for DNS-01)
       ansible.builtin.apt:
@@ -90,11 +93,18 @@
         mode: "0755"
       when: enable_tls | bool and acme_challenge == 'http'
 
+    - name: Check for an existing certificate
+      ansible.builtin.stat:
+        path: /etc/letsencrypt/live/{{ cert_name }}/fullchain.pem
+      register: cert_before
+
+    # Only needed for a first issue. Skipping it when a certificate exists also
+    # lets the playbook get past a broken nginx config to the step that fixes it
     - name: Ensure nginx is serving port 80 for the challenge
       ansible.builtin.service:
         name: nginx
         state: started
-      when: enable_tls | bool and acme_challenge == 'http'
+      when: enable_tls | bool and acme_challenge == 'http' and not cert_before.stat.exists
 
     # Staging and production certificates get different names, so switching
     # letsencrypt_staging off really requests a new, trusted certificate
@@ -131,6 +141,8 @@
         owner: root
         group: root
         mode: "0600" # contains the stream key
+      vars:
+        tls_active: "{{ cert.stat.exists }}"
       notify: Reload nginx
 
     - name: Configure streamer site (serves HLS and DASH chunks)
@@ -164,6 +176,73 @@
         src: index.html.j2
         dest: /var/www/html/index.html
         mode: "0644"
+      vars:
+        page_channel: stream
+        page_title: "{{ video_title }}"
+
+    - name: Refuse a camera ingest without TLS
+      ansible.builtin.assert:
+        that: enable_tls | bool
+        fail_msg: "camera_enabled needs enable_tls: the camera pushes over the internet and must use RTMPS"
+        quiet: true
+      when: camera_enabled | bool
+
+    # ---- Camera channel: the phone pushes over RTMPS (see nginx.conf) ----
+    - name: Create camera page folder
+      ansible.builtin.file:
+        path: /var/www/html/camera
+        state: directory
+        mode: "0755"
+      when: camera_enabled | bool
+
+    - name: Install camera page (password-protected by nginx)
+      ansible.builtin.template:
+        src: index.html.j2
+        dest: /var/www/html/camera/index.html
+        mode: "0644"
+      vars:
+        page_channel: camera
+        page_title: Camera
+      when: camera_enabled | bool
+
+    # SHA-512 crypt hash made on the server with openssl (no extra Python
+    # dependency). The salt is derived from the password, so the hash only
+    # changes when the password does (keeps the task idempotent).
+    - name: Hash the camera viewer password
+      ansible.builtin.command:
+        cmd: openssl passwd -6 -salt {{ (camera_view_password | hash('sha1'))[:16] }} -stdin
+        stdin: "{{ camera_view_password }}"
+      register: camera_view_hash
+      changed_when: false
+      no_log: true
+      when: camera_enabled | bool
+
+    - name: Install camera viewer login
+      ansible.builtin.copy:
+        dest: /etc/nginx/camera.htpasswd
+        content: "viewer:{{ camera_view_hash.stdout }}\n"
+        owner: root
+        group: www-data
+        mode: "0640"
+      no_log: true
+      when: camera_enabled | bool
+
+    # The first camera design (server pulls the phone through WireGuard) was
+    # replaced by the phone pushing over RTMPS; remove its leftovers
+    - name: Stop the old camera pull service
+      ansible.builtin.systemd:
+        name: camera-ingest
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Remove the old camera pull service files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/camera-ingest.service
+        - /etc/camera-ingest.env
 
     - name: Ensure nginx is running
       ansible.builtin.service:
@@ -181,10 +260,11 @@
     # moving a listener (e.g. 127.0.0.1:8080 <-> 0.0.0.0:8080) fails with
     # "could not bind()" while systemd still reports success, leaving the old
     # config running. RTMP publishers reconnect either way.
+    # Only restart if the configuration is valid: restarting nginx with a bad
+    # config stops it (and force_handlers runs this even after a failed task)
     - name: Reload nginx
-      ansible.builtin.service:
-        name: nginx
-        state: restarted
+      ansible.builtin.shell: nginx -t && systemctl restart nginx
+      changed_when: true
 
 - name: Video Streamer (ffmpeg loop to RTMP)
   hosts: streamer
@@ -233,9 +313,11 @@
       vars:
         wg_address: "{{ wg_streamer_ip }}"
         wg_listen: false
-        wg_peer_public_key: "{{ hostvars['web-frontend'].wg_public_key }}"
-        wg_peer_ip: "{{ wg_frontend_ip }}"
-        wg_peer_endpoint: "{{ frontend_private_ip }}:{{ wg_port }}"
+        wg_peers:
+          - name: Web Frontend
+            public_key: "{{ hostvars['web-frontend'].wg_public_key }}"
+            ip: "{{ wg_frontend_ip }}"
+            endpoint: "{{ frontend_private_ip }}:{{ wg_port }}"
       notify:
         - Restart WireGuard
         - Restart stream

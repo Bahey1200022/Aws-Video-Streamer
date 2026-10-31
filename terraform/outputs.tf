@@ -22,3 +22,19 @@ output "stream_key" {
 output "stream_url" {
   value = "${var.enable_tls && local.dns_enabled ? "https" : "http"}://${try(aws_route53_record.frontend[0].fqdn, local.frontend_public_ip)}/"
 }
+
+output "camera_url" {
+  value = var.camera_enabled ? "${var.enable_tls && local.dns_enabled ? "https" : "http"}://${try(aws_route53_record.frontend[0].fqdn, local.frontend_public_ip)}/camera/" : null
+}
+
+output "camera_view_password" {
+  description = "Login for the camera page (user: viewer)"
+  value       = random_password.camera_view.result
+  sensitive   = true
+}
+
+output "camera_publish_url" {
+  description = "Paste into the camera app (e.g. Larix Broadcaster) - contains the camera's stream key"
+  value       = var.camera_enabled ? "rtmps://${try(aws_route53_record.frontend[0].fqdn, local.frontend_public_ip)}:1936/live/camera?key=${random_password.camera_key.result}" : null
+  sensitive   = true
+}

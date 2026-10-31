@@ -28,6 +28,15 @@ http {
         "stream:{{ stream_key }}"   1;
     }
 
+    # The internet-facing camera ingest has its own check: it can only ever
+    # publish the "camera" channel, never the main stream
+    map "$arg_name:$arg_key" $camera_publish_allowed {
+        default                     0;
+{% if camera_enabled | bool %}
+        "camera:{{ camera_key }}"   1;
+{% endif %}
+    }
+
     # Logs who tried to publish and the verdict - never the key itself
     log_format publish_auth '$time_iso8601 addr=$arg_addr app=$arg_app '
                             'name=$arg_name result=$status';
@@ -38,6 +47,13 @@ http {
 
         location = /auth/publish {
             if ($publish_allowed) {
+                return 200;
+            }
+            return 403;
+        }
+
+        location = /auth/camera {
+            if ($camera_publish_allowed) {
                 return 200;
             }
             return 403;
@@ -95,4 +111,73 @@ rtmp {
             dash_fragment 15s;
         }
     }
+{% if camera_enabled | bool and tls_active %}
+
+    # Camera ingest, only reachable through the RTMPS listener below
+    # (rtmps://<fqdn>:1936/live/camera?key=...)
+    server {
+        listen 127.0.0.1:1937;
+        chunk_size 4096;
+
+        # Mobile connections die silently (carrier NAT changes the phone's
+        # address). Detect dead sessions fast, or the reconnect is refused with
+        # "already publishing" while nginx still believes the old one is alive.
+        ping 5s;
+        ping_timeout 5s;
+
+        application live {
+            live on;
+            record off;
+
+            allow publish 127.0.0.1;
+            deny publish all;
+            # Nobody may watch over RTMP: viewers must go through the
+            # password-protected HLS/DASH pages
+            deny play all;
+
+            # Free the channel if the camera stops sending, so it can reconnect
+            drop_idle_publisher 10s;
+
+            notify_method get;
+            on_publish http://127.0.0.1:8081/auth/camera;
+
+            # Low latency: 1 s chunks (needs a 1 s keyframe interval on the
+            # camera) and a short playlist; the film keeps longer chunks
+            hls on;
+            hls_path /var/www/html/stream/camera-hls;
+            hls_fragment 1s;
+            hls_playlist_length 6s;
+
+            dash on;
+            dash_path /var/www/html/stream/camera-dash;
+            dash_fragment 2s;
+            dash_playlist_length 10s;
+        }
+    }
+{% endif %}
 }
+{% if camera_enabled | bool and tls_active %}
+
+# RTMPS: the camera pushes over TLS (same Let's Encrypt certificate as the
+# website); nginx decrypts and hands the stream to the camera-only RTMP server
+stream {
+    log_format rtmps '$remote_addr [$time_local] $status sent=$bytes_sent '
+                     'received=$bytes_received $session_time';
+    access_log /var/log/nginx/rtmps-access.log rtmps;
+
+    # At most 2 simultaneous connections per client IP (brute-force / abuse)
+    limit_conn_zone $binary_remote_addr zone=rtmps_per_ip:1m;
+
+    server {
+        listen 1936 ssl;
+        ssl_certificate /etc/letsencrypt/live/{{ cert_name }}/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/{{ cert_name }}/privkey.pem;
+        ssl_protocols TLSv1.2 TLSv1.3;
+
+        limit_conn rtmps_per_ip 2;
+        # A live camera sends constantly; 15 s of silence means the connection died
+        proxy_timeout 15s;
+        proxy_pass 127.0.0.1:1937;
+    }
+}
+{% endif %}
