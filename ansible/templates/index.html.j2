@@ -79,22 +79,12 @@
     .pipeline .lock { margin-left: auto; color: var(--ok); font-size: 12px; white-space: nowrap; }
 
     footer { margin-top: 28px; color: var(--muted); font-size: 12px; text-align: center; }
-      .channels { display: flex; gap: 6px; }
-    .channels a { color: var(--muted); text-decoration: none; padding: 5px 12px; border-radius: 999px;
-                  border: 1px solid var(--line); font-size: 13px; }
-    .channels a[aria-current="page"] { color: #fff; background: var(--accent); border-color: var(--accent); }
-</style>
+  </style>
 </head>
 <body>
 <div class="wrap">
   <header>
     <h1>{{ page_title }}, live <small>{{ fqdn if fqdn != '_' else 'MSS streaming platform' }}</small></h1>
-{% if camera_enabled | bool %}
-    <nav class="channels">
-      <a href="/"{{ ' aria-current="page"' if page_channel == 'stream' else '' }}>{{ video_title }}</a>
-      <a href="/camera/"{{ ' aria-current="page"' if page_channel == 'camera' else '' }}>Camera 🔒</a>
-    </nav>
-{% endif %}
     <span id="badge" class="badge wait"><span class="dot"></span><span id="badge-text">CONNECTING</span></span>
   </header>
 
@@ -155,7 +145,6 @@
 {% raw %}
 <script>
 (() => {
-  const LOW_LATENCY = window.MSS_CHANNEL === 'camera';
   const SOURCES = {
     hls: '/hls/' + window.MSS_CHANNEL + '.m3u8',
     dash: '/dash/' + window.MSS_CHANNEL + '.mpd',
@@ -214,12 +203,7 @@
 
   function startHls() {
     if (window.Hls && Hls.isSupported()) {
-      // The camera uses 1 s chunks and stays 2 chunks behind live (speeding up
-      // slightly to catch up); the film keeps a safer 3-chunk buffer
-      hls = new Hls(LOW_LATENCY
-        ? { liveSyncDurationCount: 2, liveMaxLatencyDurationCount: 5, maxLiveSyncPlaybackRate: 1.2,
-            manifestLoadingMaxRetry: 2 }
-        : { liveSyncDurationCount: 3, manifestLoadingMaxRetry: 2 });
+      hls = new Hls({ liveSyncDurationCount: 3, manifestLoadingMaxRetry: 2 });
       hls.on(Hls.Events.ERROR, (_, data) => {
         if (data.fatal) scheduleRetry('Stream unavailable.');
       });
@@ -239,7 +223,7 @@
       return scheduleRetry('Could not load the DASH player.');
     }
     dash = dashjs.MediaPlayer().create();
-    dash.updateSettings({ streaming: { delay: { liveDelay: LOW_LATENCY ? 6 : 30 } } });
+    dash.updateSettings({ streaming: { delay: { liveDelay: 30 } } });
     dash.on(dashjs.MediaPlayer.events.ERROR, () => scheduleRetry('Stream unavailable.'));
     dash.initialize(video, SOURCES.dash, true);
   }

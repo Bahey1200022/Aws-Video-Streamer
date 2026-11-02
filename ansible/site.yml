@@ -75,8 +75,6 @@
         - /var/www/html/stream
         - /var/www/html/stream/hls
         - /var/www/html/stream/dash
-        - /var/www/html/stream/camera-hls
-        - /var/www/html/stream/camera-dash
 
     - name: Install certbot (+ Route 53 plugin for DNS-01)
       ansible.builtin.apt:
@@ -180,75 +178,93 @@
         page_channel: stream
         page_title: "{{ video_title }}"
 
-    - name: Refuse a camera ingest without TLS
-      ansible.builtin.assert:
-        that: enable_tls | bool
-        fail_msg: "camera_enabled needs enable_tls: the camera pushes over the internet and must use RTMPS"
-        quiet: true
-      when: camera_enabled | bool
-
-    # ---- Camera channel: the phone pushes over RTMPS (see nginx.conf) ----
-    - name: Create camera page folder
-      ansible.builtin.file:
-        path: /var/www/html/camera
-        state: directory
-        mode: "0755"
-      when: camera_enabled | bool
-
-    - name: Install camera page (password-protected by nginx)
-      ansible.builtin.template:
-        src: index.html.j2
-        dest: /var/www/html/camera/index.html
-        mode: "0644"
-      vars:
-        page_channel: camera
-        page_title: Camera
-      when: camera_enabled | bool
-
-    # SHA-512 crypt hash made on the server with openssl (no extra Python
-    # dependency). The salt is derived from the password, so the hash only
-    # changes when the password does (keeps the task idempotent).
-    - name: Hash the camera viewer password
-      ansible.builtin.command:
-        cmd: openssl passwd -6 -salt {{ (camera_view_password | hash('sha1'))[:16] }} -stdin
-        stdin: "{{ camera_view_password }}"
-      register: camera_view_hash
-      changed_when: false
-      no_log: true
-      when: camera_enabled | bool
-
-    - name: Install camera viewer login
-      ansible.builtin.copy:
-        dest: /etc/nginx/camera.htpasswd
-        content: "viewer:{{ camera_view_hash.stdout }}\n"
-        owner: root
-        group: www-data
-        mode: "0640"
-      no_log: true
-      when: camera_enabled | bool
-
-    # The first camera design (server pulls the phone through WireGuard) was
-    # replaced by the phone pushing over RTMPS; remove its leftovers
-    - name: Stop the old camera pull service
+    # The live-camera and weather features were removed: clean up anything
+    # an earlier deployment left on the server
+    - name: Stop the old camera pull service (leftover)
       ansible.builtin.systemd:
         name: camera-ingest
         state: stopped
         enabled: false
       failed_when: false
 
-    - name: Remove the old camera pull service files
+    - name: Remove camera and weather leftovers
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
       loop:
         - /etc/systemd/system/camera-ingest.service
         - /etc/camera-ingest.env
+        - /etc/nginx/camera.htpasswd
+        - /var/www/html/camera
+        - /var/www/html/stream/camera-hls
+        - /var/www/html/stream/camera-dash
+        - /var/cache/nginx/weather
+
+    # The Stream Studio experiment (Flask app in Docker) was dropped: remove
+    # its service, container, images, Docker itself and its files
+    - name: Check for Docker (Stream Studio leftover)
+      ansible.builtin.stat:
+        path: /usr/bin/docker
+      register: docker_bin
+
+    - name: Stop the Stream Studio service (leftover)
+      ansible.builtin.systemd:
+        name: studio
+        state: stopped
+        enabled: false
+      failed_when: false
+      when: docker_bin.stat.exists
+
+    - name: Remove the Stream Studio container and images (leftover)
+      ansible.builtin.shell: |
+        docker rm -f studio 2>/dev/null || true
+        docker image rm -f studio:latest python:3.12-slim 2>/dev/null || true
+      changed_when: true
+      when: docker_bin.stat.exists
+
+    - name: Uninstall Docker (only the Studio used it)
+      ansible.builtin.apt:
+        name: [docker.io, containerd, runc]
+        state: absent
+        purge: true
+        autoremove: true
+      when: docker_bin.stat.exists
+
+    - name: Remove Stream Studio and Docker leftovers
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/studio.service
+        - /etc/studio.env
+        - /opt/studio
+        - /var/lib/studio
+        - /etc/nginx/studio_proxy.conf
+        - /etc/docker
+        - /var/lib/docker
+        - /var/lib/containerd
 
     - name: Ensure nginx is running
       ansible.builtin.service:
         name: nginx
         state: started
         enabled: true
+
+    # Safety net: if an earlier run wrote new config but stopped before the
+    # restart (e.g. a failed config check), files are "unchanged" now and no
+    # handler fires - restart if any config file is newer than the running nginx
+    - name: Restart nginx if its running config is older than the files
+      ansible.builtin.shell: |
+        set -o pipefail
+        started=$(date -d "$(systemctl show nginx -p ActiveEnterTimestamp --value)" +%s)
+        newest=$(find /etc/nginx -type f -printf '%T@\n' | sort -n | tail -1 | cut -d. -f1)
+        if [ "$newest" -gt "$started" ]; then
+          nginx -t && systemctl restart nginx && echo restarted
+        fi
+      args:
+        executable: /bin/bash
+      register: nginx_stale
+      changed_when: "'restarted' in nginx_stale.stdout"
 
   handlers:
     - name: Restart WireGuard
