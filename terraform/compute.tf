@@ -36,11 +36,6 @@ resource "aws_instance" "frontend" {
   iam_instance_profile   = data.aws_iam_instance_profile.frontend.name
 
   associate_public_ip_address = true
-  source_dest_check           = false # required to forward the streamer's traffic
-
-  user_data = templatefile("${path.module}/nat.sh", {
-    private_cidr = data.aws_subnet.private.cidr_block
-  })
 
   # IMDSv2 only: credentials require a session token obtained with a PUT,
   # which SSRF-style plain GET requests can't do
@@ -63,7 +58,10 @@ resource "aws_instance" "frontend" {
     #   stopped (no public IP); it still gets a new public IP when it starts
     # - ami: a newer Ubuntu image must not rebuild a running server; new
     #   servers still pick up the latest image
-    ignore_changes = [associate_public_ip_address, ami]
+    # - user_data: the old NAT boot script is still stored on servers built
+    #   before the NAT was removed; it only ever runs on first boot, and
+    #   Ansible removes the service it created, so don't stop/start for it
+    ignore_changes = [associate_public_ip_address, ami, user_data]
   }
 }
 

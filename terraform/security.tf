@@ -28,20 +28,12 @@ resource "aws_security_group" "frontend" {
     cidr_blocks = [data.aws_subnet.private.cidr_block]
   }
 
-  # The frontend is the streamer's NAT: its outbound web traffic (apt) passes
-  # through here, so these rules are about forwarded traffic, not services
+  # The streamer has no internet access: it gets Ubuntu packages and security
+  # updates from the package proxy (apt-cacher-ng) running on the frontend
   ingress {
-    description = "Streamer HTTP via NAT"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = [data.aws_subnet.private.cidr_block]
-  }
-
-  ingress {
-    description = "Streamer HTTPS via NAT"
-    from_port   = 443
-    to_port     = 443
+    description = "Package proxy (apt-cacher-ng) for the streamer"
+    from_port   = 3142
+    to_port     = 3142
     protocol    = "tcp"
     cidr_blocks = [data.aws_subnet.private.cidr_block]
   }
@@ -58,7 +50,7 @@ resource "aws_security_group" "frontend" {
   # can't reach out on arbitrary ports. Amazon DNS, NTP and the metadata
   # service are not filtered by security groups.
   egress {
-    description = "HTTP out: apt, plus forwarded (NAT) traffic of the streamer"
+    description = "HTTP out: apt, and the package proxy fetching for the streamer"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
@@ -66,7 +58,7 @@ resource "aws_security_group" "frontend" {
   }
 
   egress {
-    description = "HTTPS out: apt, Lets Encrypt, plus forwarded (NAT) traffic of the streamer"
+    description = "HTTPS out: apt, Lets Encrypt, and the package proxy"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
@@ -103,19 +95,12 @@ resource "aws_security_group" "streamer" {
     cidr_blocks = [data.aws_subnet.public.cidr_block]
   }
 
+  # The streamer may only talk to the frontend: no internet at all
   egress {
-    description = "HTTP out via the frontend NAT (apt)"
-    from_port   = 80
-    to_port     = 80
+    description = "Package proxy on the frontend (apt-cacher-ng)"
+    from_port   = 3142
+    to_port     = 3142
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    description = "HTTPS out via the frontend NAT (apt)"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [data.aws_subnet.public.cidr_block]
   }
 }

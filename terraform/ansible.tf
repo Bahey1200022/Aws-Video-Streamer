@@ -46,7 +46,9 @@ resource "terraform_data" "ansible" {
   }
 
   depends_on = [
-    aws_route_table_association.private, # streamer needs the NAT route to install packages
+    # the streamer installs packages through the frontend's proxy (port 3142)
+    aws_security_group.frontend,
+    aws_security_group.streamer,
     aws_ec2_instance_state.streamer,
     aws_route53_record.frontend,
   ]

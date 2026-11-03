@@ -44,7 +44,7 @@ For a file-by-file explanation of how everything works, see [docs/HOW-IT-WORKS.m
 │  ┌───────────────────────────────┴───────────────────────┐                  │
 │  │ Web Frontend (EC2, Ubuntu 22.04)                      │                  │
 │  │  nginx + RTMP module   → /hls  /dash  (player page)   │◀── IAM role      │
-│  │  WireGuard wg0 10.99.0.1  ·  NAT for private subnet   │    r53-devops    │
+│  │  WireGuard wg0 10.99.0.1  ·  package proxy (apt)      │    r53-devops    │
 │  └───────────────────────────────▲───────────────────────┘    (certbot)     │
 │                                  ║ WireGuard UDP 51820 (encrypted)          │
 │                                  ║ carrying RTMP + stream key               │
@@ -70,7 +70,7 @@ For a file-by-file explanation of how everything works, see [docs/HOW-IT-WORKS.m
 |---|---|
 | Reuses an existing VPC | VPC, subnets and Internet Gateway are looked up, not created |
 | Two EC2 instances | Web Frontend (public subnet) and Video Streamer (private subnet), Ubuntu 22.04 |
-| NAT instance | The frontend forwards the private subnet's internet traffic (`nat.sh` + a private route table), so no paid NAT gateway is needed |
+| No internet for the private subnet | The streamer has **no route to the internet** (no NAT). It only talks to the frontend: WireGuard for the stream, SSH from it, and its **package proxy** (`apt-cacher-ng`) for Ubuntu packages and security updates |
 | DNS record | `A` record in Route 53, kept pointing at the frontend's current public IP |
 | Generated SSH key | ED25519 key created by Terraform, saved as `terraform/mss-key.pem`; nothing to set up by hand |
 | Admin IP auto-detection | The SSH allow-list follows your current public IP on every apply |
@@ -103,17 +103,19 @@ For a file-by-file explanation of how everything works, see [docs/HOW-IT-WORKS.m
 | Frontend | TCP 80, 443 | Anywhere (viewers) |
 | Frontend | TCP 22 | **Your current public IP only** (auto-detected) |
 | Frontend | UDP 51820 | Private subnet only (WireGuard) |
-| Frontend | TCP 80, 443 | Private subnet only (streamer traffic passing through the NAT) |
+| Frontend | TCP 3142 | Private subnet only (package proxy for the streamer) |
 | Streamer | TCP 22 | Frontend security group only (jump host) |
 
 **Outbound traffic is restricted too**, so a compromised process can't "phone home" on arbitrary ports:
 
 | Server | Allowed out | To |
 |---|---|---|
-| Frontend | TCP 80, 443 | Internet (apt, Let's Encrypt, and the streamer's NAT traffic) |
+| Frontend | TCP 80, 443 | Internet (apt, Let's Encrypt, and the package proxy fetching for the streamer) |
 | Frontend | TCP 22 | Private subnet (Ansible jump to the streamer) |
 | Streamer | UDP 51820 | Public subnet (WireGuard to the frontend) |
-| Streamer | TCP 80, 443 | Internet, through the frontend NAT (apt) |
+| Streamer | TCP 3142 | Public subnet (the frontend's package proxy) |
+
+**The streamer can only talk to the frontend.** The private subnet has no route to the internet: it uses the VPC's main route table, which only knows `192.168.0.0/16`. **Verified:** from the streamer, direct HTTP/HTTPS to the internet fails, while `apt update` works through the proxy.
 
 Amazon DNS, NTP and the metadata service aren't filtered by security groups. **Verified:** apt, DNS, NTP, the tunnel and the stream work, while outbound ports 25, 8080 and 6667 are blocked from both servers.
 
@@ -389,11 +391,10 @@ mss-project/
 │   ├── versions.tf                 Providers (aws, tls, local, http, random)
 │   ├── variables.tf                Inputs
 │   ├── terraform.tfvars            Your values (copy of .example)
-│   ├── network.tf                  VPC/subnet lookups, private route via NAT, admin IP detection
+│   ├── network.tf                  VPC/subnet lookups, admin IP detection (no internet route for the private subnet)
 │   ├── security.tf                 Security groups
 │   ├── iam.tf                      Route 53 zone + lab instance profile lookups
 │   ├── compute.tf                  SSH key, instances, auto-start, DNS record
-│   ├── nat.sh                      Boot script: turns the frontend into a NAT (systemd unit)
 │   ├── stream_key.tf               Stream key generation
 │   ├── kms.tf                      Customer-managed KMS key for disk encryption
 │   ├── ansible.tf                  Generates the inventory and runs the playbook
@@ -437,7 +438,7 @@ mss-project/
   - **Workaround in use:** `acme_challenge = "http"` (HTTP-01). It needs no AWS permissions, and the certificate is the same.
   - **To switch to the lab design:** once the policy includes the zone, set `acme_challenge = "dns"` and run `terraform apply`.
 - **The lab account can't create IAM roles**, so the frontend uses the lab-provided instance profile.
-- **The frontend is a single point of failure**: it's both the web server and the streamer's NAT, so if it's down, the streamer loses internet access too.
+- **The frontend is a single point of failure**: it's the web server, the stream ingest and the streamer's package proxy, so if it's down, the streamer can't publish or update.
 - **The public IP changes on every restart.** DNS uses a 60 s TTL and is updated on each `apply`.
 
 ## Troubleshooting

@@ -1,3 +1,64 @@
+# The streamer has no internet access at all. It gets Ubuntu packages and
+# security updates through a package proxy on the frontend, so the proxy must
+# be ready before anything is installed on the streamer.
+- name: Package proxy on the frontend (apt-cacher-ng)
+  hosts: frontend
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Wait for SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    - name: Wait for cloud-init (apt locks)
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+
+    - name: Install apt-cacher-ng
+      ansible.builtin.apt:
+        name: apt-cacher-ng
+        update_cache: true
+        cache_valid_time: 3600
+
+    # Listen only on the frontend's private VPC address (and localhost), never
+    # on the public side; the firewall also limits it to the private subnet
+    - name: Bind the proxy to the private address
+      ansible.builtin.lineinfile:
+        path: /etc/apt-cacher-ng/acng.conf
+        regexp: '^#?\s*BindAddress:'
+        line: "BindAddress: localhost {{ frontend_private_ip }}"
+      notify: Restart apt-cacher-ng
+
+    - name: Start apt-cacher-ng
+      ansible.builtin.service:
+        name: apt-cacher-ng
+        state: started
+        enabled: true
+
+  handlers:
+    - name: Restart apt-cacher-ng
+      ansible.builtin.service:
+        name: apt-cacher-ng
+        state: restarted
+
+- name: Point the streamer's apt at the frontend's proxy
+  hosts: streamer
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Wait for SSH (through the frontend)
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    - name: Use the frontend's package proxy (the streamer has no internet)
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/01proxy
+        content: |
+          // Installed by Ansible: all package downloads go through the
+          // frontend's apt-cacher-ng (the streamer has no internet route)
+          Acquire::http::Proxy "http://{{ frontend_private_ip }}:3142";
+        mode: "0644"
+
 - name: WireGuard keys (both hosts)
   hosts: all
   become: true
@@ -7,7 +68,7 @@
       ansible.builtin.wait_for_connection:
         timeout: 300
 
-    - name: Wait for cloud-init (NAT setup, apt locks)
+    - name: Wait for cloud-init (apt locks)
       ansible.builtin.command: cloud-init status --wait
       changed_when: false
 
@@ -177,6 +238,40 @@
       vars:
         page_channel: stream
         page_title: "{{ video_title }}"
+
+    # The frontend used to be a NAT router for the streamer (nat.sh boot
+    # script). The streamer now has no internet route: undo the NAT
+    - name: Stop the old NAT service (leftover)
+      ansible.builtin.systemd:
+        name: mss-nat
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Remove the NAT rule and turn IP forwarding off
+      ansible.builtin.shell: |
+        set -o pipefail
+        changed=no
+        while iptables -t nat -S POSTROUTING | grep -q MASQUERADE; do
+          rule=$(iptables -t nat -S POSTROUTING | grep MASQUERADE | head -1 | sed 's/^-A/-D/')
+          eval iptables -t nat $rule && changed=yes
+        done
+        if [ "$(sysctl -n net.ipv4.ip_forward)" = 1 ]; then
+          sysctl -w net.ipv4.ip_forward=0 >/dev/null && changed=yes
+        fi
+        echo $changed
+      args:
+        executable: /bin/bash
+      register: nat_cleanup
+      changed_when: nat_cleanup.stdout == "yes"
+
+    - name: Remove the old NAT service files (leftover)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/mss-nat.service
+        - /usr/local/sbin/mss-nat.sh
 
     # The live-camera and weather features were removed: clean up anything
     # an earlier deployment left on the server
