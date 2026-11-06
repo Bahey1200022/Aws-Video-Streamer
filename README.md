@@ -11,7 +11,7 @@ to browsers.
 - **Terraform** builds the AWS infrastructure.
 - **Ansible**, launched by Terraform, configures the software on both servers.
 
-For a file-by-file explanation of how everything works, see [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md). Every key and secret is described in [docs/KEYS-AND-SECRETS.md](docs/KEYS-AND-SECRETS.md).
+For a file-by-file explanation of how everything works, see [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md). Every key and secret is described in [docs/KEYS-AND-SECRETS.md](docs/KEYS-AND-SECRETS.md), the Ansible playbook play by play in [docs/PLAYBOOK.md](docs/PLAYBOOK.md), and the configuration templates in [docs/TEMPLATES.md](docs/TEMPLATES.md).
 
 ---
 
