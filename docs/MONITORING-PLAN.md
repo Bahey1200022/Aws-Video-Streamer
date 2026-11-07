@@ -1,6 +1,6 @@
 # Monitoring plan
 
-**Status:** plan only, not built yet. Kubernetes is deliberately left out for now.
+**Status:** phases M1 (monitoring server) and M2 (metrics and dashboards) are built and verified; how they work is explained in [MONITORING.md](MONITORING.md). Phases M3 to M6 are not built yet. Kubernetes is deliberately left out for now.
 
 This plan adds **monitoring, log collection and alerting** to the platform, on a **3rd server in the private subnet**. It follows the same rules as the rest of the project:
 - built with Terraform + Ansible;
