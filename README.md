@@ -11,7 +11,7 @@ to browsers.
 - **Terraform** builds the AWS infrastructure.
 - **Ansible**, launched by Terraform, configures the software on both servers.
 
-For a file-by-file explanation of how everything works, see [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md). Every key and secret is described in [docs/KEYS-AND-SECRETS.md](docs/KEYS-AND-SECRETS.md), the Ansible playbook play by play in [docs/PLAYBOOK.md](docs/PLAYBOOK.md), and the configuration templates in [docs/TEMPLATES.md](docs/TEMPLATES.md).
+For a file-by-file explanation of how everything works, see [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md). Every key and secret is described in [docs/KEYS-AND-SECRETS.md](docs/KEYS-AND-SECRETS.md), the Ansible playbook play by play in [docs/PLAYBOOK.md](docs/PLAYBOOK.md), the configuration templates in [docs/TEMPLATES.md](docs/TEMPLATES.md), and the fixes from a security self-audit in [docs/SECURITY-FIXES.md](docs/SECURITY-FIXES.md).
 
 ---
 
@@ -119,7 +119,7 @@ For a file-by-file explanation of how everything works, see [docs/HOW-IT-WORKS.m
 
 Amazon DNS, NTP and the metadata service aren't filtered by security groups. **Verified:** apt, DNS, NTP, the tunnel and the stream work, while outbound ports 25, 8080 and 6667 are blocked from both servers.
 
-RTMP (1935) and the RTMP control endpoint (8080) are **not reachable over the network**.
+RTMP (1935) is **not reachable over the network** except through the WireGuard tunnel. The RTMP control endpoint (8080, no password) listens on **localhost only**. Before that fix it listened on every interface: the security groups blocked it, but traffic inside the tunnel isn't filtered by them (see [docs/SECURITY-FIXES.md](docs/SECURITY-FIXES.md)).
 
 ### 3. Authenticated publishing (stream key)
 - The streamer must present a secret key to publish (`rtmp://…/live/stream?key=…`), the same model YouTube and Twitch use.
@@ -164,7 +164,7 @@ RTMP (1935) and the RTMP control endpoint (8080) are **not reachable over the ne
   |---|---|---|
   | Proof | TXT record `_acme-challenge.<fqdn>` written to Route 53 through the `r53-devops` role | Token file served by nginx at `http://<fqdn>/.well-known/acme-challenge/…` |
   | Needs | IAM permission on the hosted zone | Port 80 reachable |
-  | Status | Implemented, **blocked**: the lab's policy only covers two deleted zones (`AccessDenied` on `Z0316326GXOE1JMI1YJX`) | ✅ Working |
+  | Status | Implemented, **blocked**: the role's policy allows record changes only in 3 other zones (one is `devops.intuitivelabs.net`; the other two don't exist in this account), not in `Z0316326GXOE1JMI1YJX` (`AccessDenied`) | ✅ Working |
 
   The resulting certificate and encryption are identical; only the ownership proof differs.
 - **Renewal:** certbot's systemd timer renews automatically, using the same method. A deploy hook restarts nginx to load the new certificate. Port 80 keeps serving `/.well-known/acme-challenge/` unredirected so renewals work. **Verified** with `certbot renew --dry-run`.
@@ -179,6 +179,12 @@ RTMP (1935) and the RTMP control endpoint (8080) are **not reachable over the ne
 - **Git-ignored:** state, keys and the generated inventory are excluded (`*.tfstate`, `*.pem`, `inventory.yml`, `files/`).
 - **Hidden in output:** `stream_key` is a sensitive output, hidden in plan and apply output.
 
+### 8. Host hardening and patching
+- **ffmpeg runs sandboxed** ([ffmpeg-stream.service.j2](ansible/templates/ffmpeg-stream.service.j2)): a temporary unprivileged user (`DynamicUser`), a read-only system, no capabilities, a system-call filter, and network access **only to the frontend's tunnel address** (`IPAddressAllow=10.99.0.1`). It used to run as root. `systemd-analyze security` exposure score: **9.6 "UNSAFE" before → 1.2 "OK" after**. Verified: the ffmpeg user can't read the stream key or the WireGuard key, and can only reach `10.99.0.1`.
+- **RTMP admin interface on localhost only** (`listen 127.0.0.1:8080`).
+- **Security updates** on both servers: daily through `unattended-upgrades` (declared in the playbook, not left to Ubuntu's default), **and applied on every deployment**, because the lab's nightly shutdown often stops the daily timer from running. The streamer gets them through the package proxy. Servers reboot automatically if an update requires it.
+- Details, evidence and the plan: [docs/SECURITY-FIXES.md](docs/SECURITY-FIXES.md).
+
 ### Security summary
 | Threat | Mitigation |
 |---|---|
@@ -187,7 +193,9 @@ RTMP (1935) and the RTMP control endpoint (8080) are **not reachable over the ne
 | Stream hijacking (someone else publishes) | Stream key + publish allowed only from the tunnel IP |
 | Eavesdropping or theft of the stream key in the VPC | WireGuard encryption |
 | Bypassing the tunnel | Firewall blocks 1935; nginx denies non-tunnel publishers |
-| Takeover through the RTMP control API | Port 8080 not reachable from the network |
+| Takeover through the RTMP control API | Listens on localhost only (`127.0.0.1:8080`) |
+| A media-parsing bug in ffmpeg giving an attacker the streamer | ffmpeg sandboxed: unprivileged user, read-only system, may only connect to `10.99.0.1` |
+| Known vulnerabilities in installed packages | Security updates daily and on every deployment, reboot when required |
 | Theft of instance-role credentials through SSRF | IMDSv2 required (plain GET → 401) |
 | Eavesdropping or tampering between viewers and the site | HTTPS (trusted Let's Encrypt certificate), TLS 1.2+, HSTS, HTTP→HTTPS redirect |
 | Leaked disk snapshot or copied volume | Disks encrypted with a customer-managed KMS key |

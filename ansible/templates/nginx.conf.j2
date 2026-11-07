@@ -50,8 +50,11 @@ http {
         }
     }
 
+    # nginx-rtmp's admin interface (list streams, drop clients) has no
+    # password: only listen on localhost, so it's reachable from the frontend
+    # itself and nowhere else - not the VPC, not the WireGuard tunnel
     server {
-        listen 8080;
+        listen 127.0.0.1:8080;
 
         # rtmp control
         location /control {

@@ -7,12 +7,13 @@ This guide explains [`ansible/site.yml`](../ansible/site.yml): the playbook that
 - [How the playbook is started](#how-the-playbook-is-started)
 - [Ansible vocabulary](#ansible-vocabulary)
 - [Settings used by every play](#settings-used-by-every-play)
-- [Overview: the 5 plays](#overview-the-5-plays)
+- [Overview: the 6 plays](#overview-the-6-plays)
 - [Play 1: package proxy on the frontend](#play-1-package-proxy-on-the-frontend)
 - [Play 2: point the streamer's apt at the proxy](#play-2-point-the-streamers-apt-at-the-proxy)
 - [Play 3: WireGuard keys on both servers](#play-3-wireguard-keys-on-both-servers)
 - [Play 4: the Web Frontend](#play-4-the-web-frontend)
 - [Play 5: the Video Streamer](#play-5-the-video-streamer)
+- [Play 6: security updates on both servers](#play-6-security-updates-on-both-servers)
 - [Why the playbook can be re-run safely](#why-the-playbook-can-be-re-run-safely)
 - [Security measures in the playbook](#security-measures-in-the-playbook)
 - [Likely questions](#likely-questions)
@@ -29,8 +30,8 @@ The playbook is not run by hand. `terraform apply` starts it ([`terraform/ansibl
 Ansible then logs into the servers over SSH:
 
 ```
-laptop ──SSH──▶ Web Frontend (public IP)                        plays 1, 3, 4
-laptop ──SSH──▶ Web Frontend ──SSH──▶ Video Streamer (private)   plays 2, 3, 5
+laptop ──SSH──▶ Web Frontend (public IP)                        plays 1, 3, 4, 6
+laptop ──SSH──▶ Web Frontend ──SSH──▶ Video Streamer (private)   plays 2, 3, 5, 6
 ```
 
 The streamer has no public IP, so the inventory gives it a `ProxyCommand`. SSH hops through the frontend, which acts as a **jump host**.
@@ -82,7 +83,7 @@ The streamer has no public IP, so the inventory gives it a `ProxyCommand`. SSH h
 
 ---
 
-## Overview: the 5 plays
+## Overview: the 6 plays
 
 | Play | Runs on | Purpose | Lines |
 |---|---|---|---|
@@ -90,7 +91,8 @@ The streamer has no public IP, so the inventory gives it a `ProxyCommand`. SSH h
 | 2 | Streamer | Tell the streamer's apt to **use that proxy** | [44-60](../ansible/site.yml#L44-L60) |
 | 3 | Both | Install WireGuard, create each server's keys, share the public keys | [62-93](../ansible/site.yml#L62-L93) |
 | 4 | Frontend | nginx + RTMP, HTTPS certificate, website, tunnel (listening end) | [95-378](../ansible/site.yml#L95-L378) |
-| 5 | Streamer | Video, tunnel (calling end), ffmpeg loop service | [380-475](../ansible/site.yml#L380-L475) |
+| 5 | Streamer | Video, tunnel (calling end), ffmpeg loop service | [380-480](../ansible/site.yml#L380-L480) |
+| 6 | Both | Turn on daily security updates, apply pending ones now, reboot if needed | [482-521](../ansible/site.yml#L482-L521) |
 
 **The order matters:**
 
@@ -100,6 +102,8 @@ Play 2  streamer: apt → proxy ◀──────┘  the proxy before it ca
 Play 3  both:     WireGuard keys     ── each side needs the other's public key
 Play 4  frontend: receiver ready     ── nginx must listen before ffmpeg pushes
 Play 5  streamer: start streaming
+Play 6  both:     patch           ── last: every service is set to start at boot,
+                                     so a reboot brings the platform back by itself
 ```
 
 **The result:**
@@ -258,7 +262,7 @@ On a **fresh** `terraform apply`, these tasks find nothing and change nothing. `
 
 ## Play 5: the Video Streamer
 
-**Runs on:** the streamer, through the jump host. **Lines** [380-475](../ansible/site.yml#L380-L475).
+**Runs on:** the streamer, through the jump host. **Lines** [380-480](../ansible/site.yml#L380-L480).
 
 | Task | What it does |
 |---|---|
@@ -269,12 +273,30 @@ On a **fresh** `terraform apply`, these tasks find nothing and change nothing. `
 | Configure WireGuard tunnel | Fills `wg0.conf.j2` again, as the **calling** side: the streamer's address is `10.99.0.2`, it doesn't listen, and its peer is the frontend (`10.99.0.1`) with `Endpoint = <frontend_private_ip>:51820` and `PersistentKeepalive = 25`. |
 | Start WireGuard tunnel | `wg-quick@wg0`, started now and at every boot |
 | Install stream key (root-only) | [`ffmpeg-stream.env.j2`](../ansible/templates/ffmpeg-stream.env.j2) → `/etc/ffmpeg-stream.env` (`STREAM_KEY=...`, mode `0600`). The key lives in a root-only file, **never on a command line**, where `ps` or logs could show it. |
-| Install streaming service | [`ffmpeg-stream.service.j2`](../ansible/templates/ffmpeg-stream.service.j2) → a **systemd service** that runs ffmpeg forever: it loops the video (`-stream_loop -1`), re-encodes it with `-preset veryfast`, and pushes it to `rtmp://10.99.0.1:1935/live/stream?key=$STREAM_KEY` **through the tunnel**. systemd restarts it if it stops. |
+| Install streaming service | [`ffmpeg-stream.service.j2`](../ansible/templates/ffmpeg-stream.service.j2) → a **systemd service** that runs ffmpeg forever: it loops the video (`-stream_loop -1`), re-encodes it with `-preset veryfast`, and pushes it to `rtmp://10.99.0.1:1935/live/stream?key=$STREAM_KEY` **through the tunnel**. systemd restarts it if it stops. It runs **sandboxed**: as an unprivileged temporary user, with a read-only system, and allowed to connect only to `10.99.0.1` (see [TEMPLATES.md](TEMPLATES.md#the-sandbox-least-privilege-for-ffmpeg)). |
 | Start streaming service | `daemon_reload` (re-read the service files), started now and at every boot |
 
 **Handlers:**
 - `Restart WireGuard`, when the tunnel config changes.
 - `Restart stream`, when the video, the key, the tunnel or the service file changes. For example, after a stream-key rotation ffmpeg restarts with the new key.
+
+---
+
+## Play 6: security updates on both servers
+
+**Runs on:** both servers (`hosts: all`). **Lines** [482-521](../ansible/site.yml#L482-L521).
+
+**Why it exists:** Ubuntu installs security updates once a day with a timer. But the lab **stops the servers every night**, and they're only up while someone works on them, so the timer often never fires: updates were 3 days behind when this play was added. The play makes patching **declared in code** and **applied on every deployment**.
+
+| Task | What it does |
+|---|---|
+| Install unattended-upgrades | Ubuntu's automatic-update tool (usually preinstalled; this makes sure) |
+| Turn on daily automatic security updates | Writes `/etc/apt/apt.conf.d/20auto-upgrades`: refresh the package lists and install security updates every day, clean the download cache weekly. Relying on Ubuntu's default silently would mean nobody notices if it's off. |
+| Apply pending security updates now | Runs `unattended-upgrade --verbose`: **patch on every deploy**, not only when the timer fires. On the streamer, the updates come **through the package proxy**. If another apt run holds the lock, it retries 5 times, 30 s apart. Reported as "changed" only if something was upgraded. |
+| Check whether an update needs a reboot | Kernel and core-library updates only take effect after a reboot. Ubuntu creates `/var/run/reboot-required` when that's the case. |
+| Reboot to load the updates | Only if needed. Ansible reboots the server and waits until it answers again. |
+
+**Why it's the last play:** every service (nginx, WireGuard, the package proxy, ffmpeg) is `enabled` at boot. So a reboot here brings the whole platform back **by itself**, which also proves that it survives a reboot. The stream resumes within about a minute.
 
 ---
 
@@ -302,6 +324,9 @@ That's why `terraform apply` can run it again after any change, for example afte
 | Only `127.0.0.1` and `10.99.0.2` may publish, and only with the correct stream key | `nginx.conf.j2` |
 | Files that hold secrets are mode `0600` (`nginx.conf`, `wg0.conf`, `ffmpeg-stream.env`) | Plays 4-5 |
 | The stream key is never on a command line | Play 5 |
+| ffmpeg runs sandboxed as an unprivileged user, allowed to connect only to the frontend's tunnel address | Play 5, `ffmpeg-stream.service.j2` |
+| The RTMP admin interface (no password) only listens on localhost | `nginx.conf.j2` |
+| Security updates installed daily, and on every deployment, on both servers (the streamer through the proxy) | Play 6 |
 | HTTPS from Let's Encrypt, TLS 1.2/1.3, HSTS, HTTP→HTTPS redirect, automatic renewal | Play 4 |
 | `nginx -t` before every restart: a bad config can't cause an outage | Play 4 |
 | SRI hashes on the player's external scripts | `index.html.j2` |
@@ -312,7 +337,7 @@ That's why `terraform apply` can run it again after any change, for example afte
 ## Likely questions
 
 **What does the playbook do, in one sentence?**
-It turns two blank Ubuntu servers into a streaming platform: a package proxy and an HTTPS streaming website on the frontend, and an ffmpeg video loop on the streamer, connected by a WireGuard tunnel.
+It turns two blank Ubuntu servers into a patched streaming platform: a package proxy and an HTTPS streaming website on the frontend, and a sandboxed ffmpeg video loop on the streamer, connected by a WireGuard tunnel.
 
 **How does the streamer install software without internet?**
 `/etc/apt/apt.conf.d/01proxy` points apt at the frontend's apt-cacher-ng (`<frontend_private_ip>:3142`), which downloads packages from Ubuntu on its behalf. apt verifies the GPG signature of every package.
@@ -331,3 +356,6 @@ Nothing changes: it is idempotent. Handlers only fire when a file or setting act
 
 **Why restart nginx instead of reloading it, and why `nginx -t` first?**
 A reload can silently keep the old listening sockets and the old config. Testing first means a broken config never stops a working nginx.
+
+**How do the servers get security updates, if the streamer has no internet?**
+`unattended-upgrades` installs them daily, and play 6 also applies them on every deployment. The streamer downloads them through the frontend's package proxy, like any other package.

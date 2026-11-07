@@ -166,16 +166,18 @@ log_format publish_auth '$time_iso8601 addr=$arg_addr app=$arg_app name=$arg_nam
 
 It records **who** tried to publish and the **verdict** (200 or 403), but **never the key**. A failed attempt shows up in `/var/log/nginx/publish-auth.log` as `result=403`.
 
-**The RTMP control server** (lines 53-60):
+**The RTMP control server**:
 
 ```nginx
 server {
-    listen 8080;
+    listen 127.0.0.1:8080;
     location /control { rtmp_control all; }
 }
 ```
 
-nginx-rtmp's control interface, used to list or drop publishers. **Note:** `listen 8080` listens on every interface. The security groups don't allow port 8080 in from the internet or the VPC. But traffic arriving **inside the WireGuard tunnel** (from `10.99.0.2`) isn't filtered by the security group, so the streamer could reach it. Binding it to `127.0.0.1:8080` would close that gap.
+nginx-rtmp's control interface, used to list streams or drop clients. It has **no password**, so it listens **only on localhost**: reachable from the frontend itself, and nowhere else.
+
+It used to be `listen 8080`, on every interface. The security groups blocked port 8080 from the internet and the VPC, but traffic arriving **inside the WireGuard tunnel** isn't seen by the security groups, so the streamer could reach it. See [SECURITY-FIXES.md](SECURITY-FIXES.md).
 
 ### The `rtmp` block (lines 63-100)
 
@@ -465,9 +467,24 @@ ExecStart=/usr/bin/ffmpeg -nostdin -loglevel warning \
 Restart=always
 RestartSec=5
 
+# --- Sandbox (least privilege) ---
+DynamicUser=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+...                                   (kernel, process and system-call restrictions)
+RestrictAddressFamilies=AF_INET AF_UNIX
+IPAddressDeny=any
+IPAddressAllow={{ wg_frontend_ip }}
+
 [Install]
 WantedBy=multi-user.target
 ```
+
+(The `...` stands for more restrictions; the template lists them all with comments.)
 
 ### `[Unit]`: when to start
 
@@ -489,6 +506,26 @@ WantedBy=multi-user.target
 | `-f flv` | Package it as **FLV**, the format RTMP carries |
 | `rtmp://10.99.0.1:1935/live/stream?key=${STREAM_KEY}` | Send it to the frontend's **tunnel address** (so it travels encrypted), to the `live` application, as the stream named `stream`, with the key. systemd fills in `${STREAM_KEY}` from the env file. |
 | `Restart=always`, `RestartSec=5` | If ffmpeg stops for any reason (a network blip, the frontend restarting), **start it again after 5 seconds** |
+
+### The sandbox: least privilege for ffmpeg
+
+ffmpeg parses complex media formats, a classic source of security bugs. It only needs to **read one video file** and **send it to one address**, so systemd takes everything else away. Without these lines, ffmpeg ran as **root**.
+
+| Line(s) | What it takes away |
+|---|---|
+| `DynamicUser=yes` | Runs as a **temporary unprivileged user** created for this service, not root |
+| `NoNewPrivileges=yes`, `CapabilityBoundingSet=` | Can never gain privileges (no sudo, no setuid) and holds no special capabilities |
+| `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `PrivateDevices=yes` | The filesystem is **read-only**; `/home`, the real `/tmp` and hardware devices are invisible |
+| `ProtectKernel*`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname` | Can't change kernel settings, load modules, read kernel logs, or change the clock or hostname |
+| `ProtectProc=invisible`, `ProcSubset=pid` | Can't see other processes |
+| `RestrictNamespaces`, `RestrictRealtime`, `RestrictSUIDSGID`, `LockPersonality`, `MemoryDenyWriteExecute` | Blocks common exploit techniques |
+| `SystemCallFilter=@system-service` + `~@privileged @resources` | Only the system calls a normal service needs; anything else fails with "permission denied" |
+| `RestrictAddressFamilies=AF_INET AF_UNIX` | Only IPv4 (plus local sockets, for logging) |
+| `IPAddressDeny=any` + `IPAddressAllow=10.99.0.1` | **Can only connect to the frontend's tunnel address.** Even a hijacked ffmpeg couldn't reach anything else. |
+
+**The stream key still works:** systemd reads the root-only env file **before** starting ffmpeg, and hands the key over. ffmpeg itself can't read the file.
+
+**To check it:** `systemd-analyze security ffmpeg-stream.service` scores a service's exposure from 0 (locked down) to 10 (unprotected). See [SECURITY-FIXES.md](SECURITY-FIXES.md) for the before and after scores.
 
 ### `[Install]`: start at boot
 
@@ -536,6 +573,8 @@ The same key is also in `nginx.conf` (mode `0600`) on the frontend, which compar
 | The stream travels inside an encrypted, authenticated tunnel | `wg0.conf.j2`, `ffmpeg-stream.service.j2` |
 | WireGuard private keys are loaded from disk and never appear in a config file or variable | `wg0.conf.j2` |
 | Each tunnel peer may only use its one address (`AllowedIPs /32`) | `wg0.conf.j2` |
+| ffmpeg runs sandboxed as an unprivileged user, and may only connect to the frontend's tunnel address | `ffmpeg-stream.service.j2` |
+| The RTMP admin interface (no password) only listens on localhost | `nginx.conf.j2` |
 
 ---
 

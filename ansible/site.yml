@@ -473,3 +473,50 @@
         name: ffmpeg-stream
         state: restarted
         daemon_reload: true
+
+# The lab stops the servers every night, so Ubuntu's daily update timer often
+# never fires while they are up and security updates pile up. Declare the
+# automatic updates explicitly, and also apply pending security updates on
+# every deployment ("patch on deploy"). The streamer gets them through the
+# frontend's package proxy.
+- name: Security updates (both hosts)
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Install unattended-upgrades
+      ansible.builtin.apt:
+        name: unattended-upgrades
+
+    - name: Turn on daily automatic security updates
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        content: |
+          // Installed by Ansible: refresh the package lists and install
+          // security updates every day
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+          APT::Periodic::AutocleanInterval "7";
+        mode: "0644"
+
+    - name: Apply pending security updates now
+      ansible.builtin.command: unattended-upgrade --verbose
+      register: patch
+      # Ubuntu's own daily run may hold the apt lock (it happened on the first
+      # deployment and took ~2.5 minutes): keep trying for up to 5 minutes
+      retries: 10
+      delay: 30
+      until: patch.rc == 0
+      changed_when: "'Packages that will be upgraded' in patch.stdout"
+
+    - name: Check whether an update needs a reboot (kernel, libc...)
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    # Every service (nginx, WireGuard, the proxy, ffmpeg) is enabled at boot,
+    # so the platform comes back on its own; the stream resumes within a minute
+    - name: Reboot to load the updates
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+      when: reboot_required.stat.exists
