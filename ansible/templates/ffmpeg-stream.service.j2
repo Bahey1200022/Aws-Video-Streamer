@@ -15,7 +15,13 @@ ExecStart=/usr/bin/ffmpeg -nostdin -loglevel warning \
   -c:v libx264 -preset veryfast \
   -c:a aac \
   -f flv \
-  rtmp://{{ wg_frontend_ip }}:1935/live/stream?key=${STREAM_KEY}
+  -rtmp_app live \
+  -rtmp_playpath stream?key=${STREAM_KEY} \
+  rtmp://{{ wg_frontend_ip }}:1935
+# The key goes in -rtmp_playpath, not in the URL: ffmpeg repeats the URL in
+# its error messages ("Connection refused" while the frontend boots, "Broken
+# pipe" at shutdown), which put the key in the system log. nginx-rtmp
+# receives exactly the same thing (app "live", stream "stream?key=...").
 Restart=always
 RestartSec=5
 

@@ -70,6 +70,8 @@
       ansible.builtin.apt:
         update_cache: true
         cache_valid_time: 3600
+      # Refreshing the lists isn't a configuration change
+      changed_when: false
 
 - name: WireGuard keys (frontend and streamer)
   hosts: frontend:streamer
@@ -474,6 +476,42 @@
         enabled: true
         daemon_reload: true
 
+    # ffmpeg used to have the key in its URL and repeated the URL in its error
+    # messages, so old system logs contain it. Restart ffmpeg first (its last
+    # message as the old process could still contain the key), then remove the
+    # key from the logs - before any log shipping (Alloy) can pick it up.
+    - name: Apply a new ffmpeg configuration now
+      ansible.builtin.meta: flush_handlers
+
+    - name: Remove stream keys leaked into old system logs
+      ansible.builtin.shell: |
+        set -o pipefail
+        # A real key: "key=" + letters/digits, but not the word REDACTED
+        has_key() { grep -oE 'key=[A-Za-z0-9]+' | grep -qvx 'key=REDACTED'; }
+        found=0
+        if journalctl --no-pager -q | has_key; then found=1; fi
+        for f in /var/log/syslog*; do
+          if zcat -f "$f" | has_key; then found=1; fi
+        done
+        if [ "$found" = 0 ]; then echo "clean"; exit 0; fi
+        # The journal cannot be edited: archive it and delete the archives
+        journalctl --rotate
+        journalctl --vacuum-time=1s
+        # Text logs: replace the key, keeping the same file so rsyslog
+        # carries on writing to it
+        for f in /var/log/syslog*; do
+          zcat -f "$f" | has_key || continue
+          case "$f" in
+            *.gz) zcat "$f" | sed -E 's/key=[A-Za-z0-9]+/key=REDACTED/g' | gzip > "$f.tmp" && mv "$f.tmp" "$f" ;;
+            *) sed -E 's/key=[A-Za-z0-9]+/key=REDACTED/g' "$f" > "$f.tmp" && cat "$f.tmp" > "$f" && rm "$f.tmp" ;;
+          esac
+        done
+        echo "cleaned"
+      args:
+        executable: /bin/bash
+      register: leak_cleanup
+      changed_when: "'cleaned' in leak_cleanup.stdout"
+
   handlers:
     - name: Restart WireGuard
       ansible.builtin.systemd:
@@ -659,7 +697,7 @@
 # localhost only; Grafana is reached through an SSH tunnel (Terraform output
 # "grafana_tunnel"). Grafana isn't in Ubuntu's repositories: it is downloaded
 # on the control machine, checked against its pinned SHA-256, and uploaded.
-- name: Monitoring server (Prometheus, blackbox_exporter, Grafana)
+- name: Monitoring server (Prometheus, blackbox_exporter, Loki, Grafana)
   hosts: monitoring
   become: true
   gather_facts: false
@@ -703,11 +741,67 @@
         mode: "0644"
       notify: Restart blackbox_exporter
 
-    - name: Download Grafana on the control machine (checksum verified)
+    # Loki's package starts Loki as soon as it is installed, with a demo
+    # config (all interfaces, debug logs, data in /tmp). So our config and
+    # the systemd drop-in that points to it are written BEFORE the install:
+    # the very first start already uses them.
+    - name: Create Loki's config folder
+      ansible.builtin.file:
+        path: /etc/loki
+        state: directory
+        mode: "0755"
+
+    - name: Loki settings (private IP, retention)
+      ansible.builtin.template:
+        src: loki.yml.j2
+        dest: /etc/loki/mss.yml
+        mode: "0644"
+      notify: Restart Loki
+
+    - name: Create the Loki drop-in folder
+      ansible.builtin.file:
+        path: /etc/systemd/system/loki.service.d
+        state: directory
+        mode: "0755"
+
+    - name: Run Loki with our settings, sandboxed
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/loki.service.d/mss.conf
+        content: |
+          # Installed by Ansible
+          [Service]
+          ExecStart=
+          ExecStart=/usr/bin/loki -config.file=/etc/loki/mss.yml
+          # /var/lib/loki, owned by the loki user, is its only writable folder
+          StateDirectory=loki
+          StateDirectoryMode=0750
+          NoNewPrivileges=yes
+          CapabilityBoundingSet=
+          ProtectSystem=strict
+          ProtectHome=yes
+          PrivateTmp=yes
+          PrivateDevices=yes
+          ProtectKernelTunables=yes
+          ProtectKernelModules=yes
+          ProtectKernelLogs=yes
+          ProtectControlGroups=yes
+          ProtectClock=yes
+          ProtectHostname=yes
+          RestrictNamespaces=yes
+          RestrictRealtime=yes
+          RestrictSUIDSGID=yes
+          LockPersonality=yes
+          RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+          SystemCallArchitectures=native
+          SystemCallFilter=@system-service
+        mode: "0644"
+      notify: Restart Loki
+
+    - name: Download Loki on the control machine (checksum verified)
       ansible.builtin.get_url:
-        url: "{{ grafana_url }}"
-        dest: "{{ playbook_dir }}/files/{{ grafana_deb }}"
-        checksum: "sha256:{{ grafana_sha256 }}"
+        url: "{{ loki_url }}"
+        dest: "{{ playbook_dir }}/files/{{ loki_deb }}"
+        checksum: "sha256:{{ loki_sha256 }}"
         mode: "0644"
       delegate_to: localhost
       become: false
@@ -718,6 +812,30 @@
         path: "{{ package_dir }}"
         state: directory
         mode: "0755"
+
+    - name: Upload Loki
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/files/{{ loki_deb }}"
+        dest: "{{ package_dir }}/{{ loki_deb }}"
+        mode: "0644"
+
+    - name: Install Loki
+      ansible.builtin.apt:
+        deb: "{{ package_dir }}/{{ loki_deb }}"
+
+    - name: Check the Loki settings
+      ansible.builtin.command: /usr/bin/loki -verify-config -config.file=/etc/loki/mss.yml
+      changed_when: false
+
+    - name: Download Grafana on the control machine (checksum verified)
+      ansible.builtin.get_url:
+        url: "{{ grafana_url }}"
+        dest: "{{ playbook_dir }}/files/{{ grafana_deb }}"
+        checksum: "sha256:{{ grafana_sha256 }}"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+      run_once: true # noqa: run-once[task]
 
     - name: Upload Grafana
       ansible.builtin.copy:
@@ -794,6 +912,7 @@
       loop:
         - prometheus
         - prometheus-blackbox-exporter
+        - loki
         - grafana-server
 
     - name: Apply pending restarts before checking Grafana
@@ -828,8 +947,186 @@
         name: prometheus-blackbox-exporter
         state: restarted
 
+    - name: Restart Loki
+      ansible.builtin.systemd:
+        name: loki
+        state: restarted
+        daemon_reload: true
+
     - name: Restart Grafana
       ansible.builtin.systemd:
         name: grafana-server
         state: restarted
         daemon_reload: true
+
+# Log agents. Alloy reads each server's logs (the systemd journal: SSH, sudo,
+# services, updates; on the frontend also the nginx logs) and pushes them to
+# Loki on the monitoring server. Runs after the monitoring server's play so
+# Loki is already up. Skipped when the monitoring server is disabled.
+- name: Log agents (all servers)
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    package_dir: /var/cache/mss-packages
+  tasks:
+    - name: Log agents
+      when: groups.get('monitoring', []) | length > 0
+      block:
+        - name: Download Alloy on the control machine (checksum verified)
+          ansible.builtin.get_url:
+            url: "{{ alloy_url }}"
+            dest: "{{ playbook_dir }}/files/{{ alloy_deb }}"
+            checksum: "sha256:{{ alloy_sha256 }}"
+            mode: "0644"
+          delegate_to: localhost
+          become: false
+          run_once: true # noqa: run-once[task]
+
+        - name: Create the package folder
+          ansible.builtin.file:
+            path: "{{ package_dir }}"
+            state: directory
+            mode: "0755"
+
+        - name: Upload Alloy
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/files/{{ alloy_deb }}"
+            dest: "{{ package_dir }}/{{ alloy_deb }}"
+            mode: "0644"
+
+        # The package adds the alloy user to the adm and systemd-journal
+        # groups, which can read the logs; it doesn't start Alloy by itself
+        - name: Install Alloy
+          ansible.builtin.apt:
+            deb: "{{ package_dir }}/{{ alloy_deb }}"
+
+        - name: Alloy options (no usage reporting, its web page on localhost)
+          ansible.builtin.lineinfile:
+            path: /etc/default/alloy
+            regexp: "^CUSTOM_ARGS="
+            line: CUSTOM_ARGS="--disable-reporting --server.http.listen-addr=127.0.0.1:12345"
+          notify: Restart Alloy
+
+        - name: What Alloy reads and where it sends it
+          ansible.builtin.template:
+            src: alloy.config.j2
+            dest: /etc/alloy/config.alloy
+            owner: root
+            group: alloy
+            mode: "0640"
+            validate: alloy fmt %s
+          notify: Restart Alloy
+
+        - name: Create the Alloy drop-in folder
+          ansible.builtin.file:
+            path: /etc/systemd/system/alloy.service.d
+            state: directory
+            mode: "0755"
+
+        - name: Sandbox Alloy and cap its memory
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/alloy.service.d/mss.conf
+            content: |
+              # Installed by Ansible
+              [Service]
+              # Reads the logs, writes only its own data folder
+              NoNewPrivileges=yes
+              CapabilityBoundingSet=
+              ProtectSystem=strict
+              ReadWritePaths=/var/lib/alloy
+              ProtectHome=yes
+              PrivateTmp=yes
+              PrivateDevices=yes
+              ProtectKernelTunables=yes
+              ProtectKernelModules=yes
+              ProtectControlGroups=yes
+              RestrictNamespaces=yes
+              RestrictSUIDSGID=yes
+              LockPersonality=yes
+              RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+              SystemCallArchitectures=native
+              SystemCallFilter=@system-service
+              # Network: only Loki on the monitoring server (and localhost)
+              IPAddressDeny=any
+              IPAddressAllow=localhost {{ monitoring_private_ip }}
+              # The frontend and the streamer have 1 GB of RAM
+              MemoryMax=250M
+              Environment=GOMEMLIMIT=180MiB
+            mode: "0644"
+          notify: Restart Alloy
+
+        - name: Start Alloy
+          ansible.builtin.systemd:
+            name: alloy
+            state: started
+            enabled: true
+            daemon_reload: true
+
+  handlers:
+    - name: Restart Alloy
+      ansible.builtin.systemd:
+        name: alloy
+        state: restarted
+        daemon_reload: true
+
+# Convenience on the control machine: open Grafana at http://localhost:3000
+# after every deployment. An SSH tunnel through the frontend (jump host) runs
+# in the background; an old one is closed first, because the frontend gets a
+# new public IP after each nightly restart. To reopen it without a full
+# deployment: ansible-playbook site.yml --tags grafana
+- name: Open Grafana on this machine (http://localhost:3000)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [grafana]
+  vars:
+    frontend: "{{ hostvars['web-frontend'] }}"
+    tunnel_socket: "{{ playbook_dir }}/.grafana-tunnel.sock"
+    tunnel_ssh_opts: >-
+      -i {{ frontend.ansible_ssh_private_key_file }}
+      -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
+  tasks:
+    - name: Grafana tunnel
+      when:
+        - groups.get('monitoring', []) | length > 0
+        - open_grafana_tunnel | default(true) | bool
+      block:
+        - name: Close the previous tunnel, if any
+          ansible.builtin.command: ssh -S {{ tunnel_socket }} -O exit monitoring
+          register: old_tunnel
+          failed_when: false
+          changed_when: old_tunnel.rc == 0
+
+        # -f: go to the background once connected; -M -S: a control socket,
+        # so the next run can close it; output to /dev/null so Ansible
+        # doesn't wait for the background process
+        - name: Open the tunnel in the background
+          ansible.builtin.shell: >-
+            ssh -f -N -M -S {{ tunnel_socket }} {{ tunnel_ssh_opts }}
+            -o ExitOnForwardFailure=yes -o ServerAliveInterval=30
+            -o ProxyCommand="ssh {{ tunnel_ssh_opts }} -W %h:%p ubuntu@{{ frontend.ansible_host }}"
+            -L 127.0.0.1:3000:localhost:3000
+            ubuntu@{{ frontend.monitoring_private_ip }}
+            </dev/null >/dev/null 2>&1
+          register: tunnel
+          changed_when: tunnel.rc == 0
+          # Port 3000 already taken (e.g. a tunnel opened by hand): report it,
+          # but don't fail the deployment for a convenience
+          failed_when: false
+
+        - name: Check Grafana through the tunnel
+          ansible.builtin.uri:
+            url: http://127.0.0.1:3000/api/health
+          register: grafana_health
+          retries: 5
+          delay: 2
+          until: grafana_health.status == 200
+          failed_when: false
+
+        - name: How to open Grafana
+          ansible.builtin.debug:
+            msg: >-
+              {{ 'Grafana: http://localhost:3000 (user admin; password: terraform output -raw grafana_admin_password)'
+                 if grafana_health.status | default(0) == 200
+                 else 'Grafana tunnel could not be opened (port 3000 busy?). Retry: ansible-playbook site.yml --tags grafana' }}

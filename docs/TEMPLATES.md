@@ -463,7 +463,9 @@ ExecStart=/usr/bin/ffmpeg -nostdin -loglevel warning \
   -c:v libx264 -preset veryfast \
   -c:a aac \
   -f flv \
-  rtmp://{{ wg_frontend_ip }}:1935/live/stream?key=${STREAM_KEY}
+  -rtmp_app live \
+  -rtmp_playpath stream?key=${STREAM_KEY} \
+  rtmp://{{ wg_frontend_ip }}:1935
 Restart=always
 RestartSec=5
 
@@ -504,7 +506,8 @@ WantedBy=multi-user.target
 | `-c:v libx264 -preset veryfast` | Re-encode the video as **H.264** (what HLS/DASH players expect). `veryfast` uses little CPU, which suits a small t3 instance. |
 | `-c:a aac` | Encode the sound as **AAC** |
 | `-f flv` | Package it as **FLV**, the format RTMP carries |
-| `rtmp://10.99.0.1:1935/live/stream?key=${STREAM_KEY}` | Send it to the frontend's **tunnel address** (so it travels encrypted), to the `live` application, as the stream named `stream`, with the key. systemd fills in `${STREAM_KEY}` from the env file. |
+| `-rtmp_app live -rtmp_playpath stream?key=${STREAM_KEY}` `rtmp://10.99.0.1:1935` | Send it to the frontend's **tunnel address** (so it travels encrypted), to the `live` application, as the stream named `stream`, with the key. systemd fills in `${STREAM_KEY}` from the env file. nginx-rtmp receives exactly what it did when the key was in the URL. |
+| Why not `rtmp://…/live/stream?key=…` | That was the original form. ffmpeg **repeats the URL in its error messages** (`Connection refused` while the frontend boots, `Broken pipe` at shutdown), which wrote the key into the streamer's system log 41 times. With the key in `-rtmp_playpath`, errors show only `rtmp://10.99.0.1:1935`. Found while planning log shipping (see [MONITORING-PLAN.md](MONITORING-PLAN.md#m3-in-detail-logs-with-loki-and-alloy)). |
 | `Restart=always`, `RestartSec=5` | If ffmpeg stops for any reason (a network blip, the frontend restarting), **start it again after 5 seconds** |
 
 ### The sandbox: least privilege for ffmpeg

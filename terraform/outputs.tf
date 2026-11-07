@@ -35,6 +35,6 @@ output "grafana_tunnel" {
 }
 
 output "grafana_admin_password" {
-  value     = try(random_password.grafana_admin[0].result, null)
+  value     = local.monitoring_enabled ? local.grafana_admin_password : null
   sensitive = true
 }

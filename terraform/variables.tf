@@ -87,3 +87,14 @@ variable "monitoring_instance_type" {
   type        = string
   default     = "t3.small"
 }
+
+variable "grafana_admin_password" {
+  description = <<-EOT
+    Fixed password for Grafana's admin account. Leave null to generate a
+    random one. Set it in the git-ignored secrets.auto.tfvars, never in
+    terraform.tfvars (which is committed).
+  EOT
+  type        = string
+  default     = null
+  sensitive   = true
+}

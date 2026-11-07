@@ -1,0 +1,63 @@
+# {{ ansible_managed }}
+# Loki: stores the logs pushed by Alloy on the 3 servers. Single server, data
+# on the local disk, {{ monitoring_retention_days }} days of retention.
+# No authentication yet: only the security groups protect port 3100 (M5 adds
+# TLS and authentication). See docs/MONITORING.md.
+auth_enabled: false
+
+server:
+  # The agents on the frontend and the streamer must reach it: private IP only
+  http_listen_address: {{ monitoring_private_ip }}
+  http_listen_port: 3100
+  # Loki's internal traffic: localhost only
+  grpc_listen_address: 127.0.0.1
+  grpc_listen_port: 9096
+  log_level: info
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /var/lib/loki
+  storage:
+    filesystem:
+      chunks_directory: /var/lib/loki/chunks
+      rules_directory: /var/lib/loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: "2026-11-01"
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+# Deletes logs older than the retention period
+compactor:
+  working_directory: /var/lib/loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
+limits_config:
+  retention_period: {{ monitoring_retention_days * 24 }}h
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+
+query_range:
+  results_cache:
+    cache:
+      embedded_cache:
+        enabled: true
+        max_size_mb: 50
+
+# Not used here; saves memory
+pattern_ingester:
+  enabled: false
+
+# No internet on this server, and no reason to report usage
+analytics:
+  reporting_enabled: false

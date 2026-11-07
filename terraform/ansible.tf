@@ -25,7 +25,7 @@ resource "local_file" "inventory" {
     stream_key          = random_password.stream_key.result
     # Monitoring server (null when enable_monitoring = false)
     monitoring_private_ip  = try(aws_instance.monitoring[0].private_ip, null)
-    grafana_admin_password = try(random_password.grafana_admin[0].result, "")
+    grafana_admin_password = local.grafana_admin_password
   })
 }
 

@@ -1,6 +1,6 @@
 # Monitoring plan
 
-**Status:** phases M1 (monitoring server) and M2 (metrics and dashboards) are built and verified; how they work is explained in [MONITORING.md](MONITORING.md). Phases M3 to M6 are not built yet. Kubernetes is deliberately left out for now.
+**Status:** phases M1 (monitoring server), M2 (metrics and dashboards) and M3 (logs) are built and verified; how they work is explained in [MONITORING.md](MONITORING.md). Phases M4 to M6 are not built yet. Kubernetes is deliberately left out for now.
 
 This plan adds **monitoring, log collection and alerting** to the platform, on a **3rd server in the private subnet**. It follows the same rules as the rest of the project:
 - built with Terraform + Ansible;
@@ -15,6 +15,7 @@ This plan adds **monitoring, log collection and alerting** to the platform, on a
 - [Architecture](#architecture)
 - [What will be monitored](#what-will-be-monitored)
 - [Logs (SIEM-lite)](#logs-siem-lite)
+- [M3 in detail: logs with Loki and Alloy](#m3-in-detail-logs-with-loki-and-alloy)
 - [Alerts](#alerts)
 - [Security of the monitoring itself](#security-of-the-monitoring-itself)
 - [Implementation phases](#implementation-phases)
@@ -148,20 +149,112 @@ Possible remedies, if it matters: stream the file without re-encoding (`-c copy`
 
 ## Logs (SIEM-lite)
 
-**Alloy** on the frontend and the streamer ships these logs to **Loki**, labelled by server and source:
+**Alloy** on all 3 servers ships logs to **Loki** on the monitoring server, labelled by server and source. The detailed design is in [M3 in detail](#m3-in-detail-logs-with-loki-and-alloy).
 
 | Log | Server | What we look for |
 |---|---|---|
 | `/var/log/nginx/publish-auth.log` | Frontend | `result=403`: **wrong stream key** |
-| `/var/log/auth.log` | Both | SSH logins (accepted and failed), `sudo` commands |
-| `/var/log/nginx/access.log` | Frontend | Scanners: many 404s or odd paths from one IP |
 | `/var/log/nginx/rtmp-access.log` | Frontend | Publisher connects and disconnects |
-| systemd journal for `ffmpeg-stream` | Streamer | Crashes and restarts |
-| `/var/log/unattended-upgrades/` | Both | Failed security updates |
+| `/var/log/nginx/access.log` | Frontend | Scanners: many 404s or odd paths from one IP |
+| `/var/log/nginx/error.log` | Frontend | nginx errors |
+| systemd journal: `sshd` | All 3 | SSH logins (accepted and failed) |
+| systemd journal: `sudo` | All 3 | Commands run as root |
+| systemd journal: `ffmpeg-stream` | Streamer | Crashes, restarts, connection errors |
+| systemd journal: everything else | All 3 | Service failures, security updates (`unattended-upgrades`), WireGuard |
 
-**Secrets stay out:** the RTMP and auth logs already use key-free formats ([TEMPLATES.md](TEMPLATES.md)), so the stream key never reaches Loki.
+SSH and sudo are read from the **journal**, not from `/var/log/auth.log`: the same lines are in both, and reading both would store them twice.
+
+**Secrets stay out:**
+- the RTMP and publish-auth logs already use key-free formats ([TEMPLATES.md](TEMPLATES.md));
+- ffmpeg's error messages **did** contain the stream key (found while planning M3; see below). M3 fixes that at the source and adds a redaction filter in Alloy as a second layer.
 
 **About fail2ban:** it isn't planned. SSH is already restricted to one IP by the security group, so internet brute force can't reach it. **Alerting** on any SSH failure is more useful here than banning.
+
+---
+
+## M3 in detail: logs with Loki and Alloy
+
+### Findings that shaped the design
+
+Checked on the live servers and in the pinned packages before writing this plan.
+
+| Finding | Consequence |
+|---|---|
+| **ffmpeg writes the stream key into the streamer's system log.** Its error messages repeat the output URL, which contains `?key=…`: 41 lines in the journal and 2 in syslog (errors like `Connection refused` while the frontend boots, `Broken pipe` at shutdown). The logs are root/`adm`-only, on a server without internet. | Must be fixed **before** any log leaves the server, or the key would be copied into Loki and shown in Grafana. |
+| ffmpeg can send the key separately: `-rtmp_app live -rtmp_playpath "stream?key=…"` with the URL `rtmp://10.99.0.1:1935`. Tested with a dummy key: errors then print only `rtmp://host:port`. | Fix at the source; the key reaches nginx-rtmp exactly as before. |
+| Alloy reads up to **7 hours back** in the journal when it first starts. | The leaked lines from today would be shipped. The old journal is cleaned once, and Alloy redacts `key=…` anyway. |
+| The log files are readable by the `adm` group; the Alloy package adds its user to `adm` and `systemd-journal`. | No permission changes needed. |
+| **Alloy is large:** 168 MB download, 555 MB installed. Free disk: 4.7 GB on the frontend and the streamer. | Acceptable; measured after install. |
+| Free memory: about 527 MB on the frontend, 500 MB on the streamer, 1.25 GB on the monitoring server. | Alloy gets a memory cap (see below). |
+| **The Loki package starts Loki as soon as it is installed**, with a demo config: listens on all interfaces, debug logging, data in `/tmp/loki`. | Our config and a systemd drop-in are written **before** the package is installed, so Loki's very first start already uses them. |
+| The Alloy package does **not** start Alloy on install. | Its config is written after install, then it is started. |
+| The nginx access log gets 2 lines every 15 s from the website probes (about 11,500 a day). | Probe lines are dropped by Alloy, so real visitors and scanners stand out. |
+
+### Steps
+
+**Step 0. Stop the stream key leak (streamer)**
+1. [ffmpeg-stream.service.j2](../ansible/templates/ffmpeg-stream.service.j2): the key moves out of the URL, into `-rtmp_app live -rtmp_playpath "stream?key=${STREAM_KEY}"`, with the output `rtmp://{{ wg_frontend_ip }}:1935`.
+2. A one-time cleanup of the old lines: rotate and empty the streamer's journal, and replace the key in `/var/log/syslog*` with `REDACTED`. This removes the streamer's old system logs; there is nothing else in them worth keeping.
+3. Verify: the stream comes back (publish-auth shows `result=200`), and a search for `key=` followed by characters finds nothing in the logs.
+
+**Step 1. Loki (monitoring server)**
+- Written first: `/etc/loki/mss.yml` and a drop-in `loki.service.d/mss.conf` that points Loki at it and sandboxes it. Then the pinned `.deb` is downloaded on the control machine, checked against its SHA-256, uploaded and installed.
+- Settings ([loki.yml.j2](../ansible/templates/)):
+  - HTTP on the **private IP only**, port 3100 (the agents must reach it); gRPC on `127.0.0.1` only;
+  - single server, data in `/var/lib/loki` on the local disk;
+  - **15 days retention** (the compactor deletes older logs), like Prometheus;
+  - log level `info`, usage reporting off.
+- Sandbox: unprivileged `loki` user, read-only system except `/var/lib/loki`, no capabilities, private `/tmp`.
+
+**Step 2. Alloy (all 3 servers)**
+- The pinned `.deb`, downloaded once on the control machine, checked, uploaded to each server and installed.
+- Config ([alloy.config.j2](../ansible/templates/), one template with a frontend-only part):
+  - **journal:** everything, with labels `unit` (e.g. `ssh.service`) and `level`;
+  - **frontend only:** the 4 nginx logs, with label `log` (`access`, `error`, `publish-auth`, `rtmp-access`); website-probe lines dropped;
+  - **redaction:** any `key=…` value is replaced by `key=REDACTED` before sending (second layer after step 0);
+  - **send** to `http://<monitoring IP>:3100`, adding the label `server` (`web-frontend`, `video-streamer`, `monitoring`), the same names as in Prometheus.
+- Alloy's own web page stays on `127.0.0.1:12345`; usage reporting off (`--disable-reporting`).
+- Sandbox drop-in: read-only system except its data folder; network allowed only to the monitoring server and localhost; **memory capped** (`MemoryMax=250M`, `GOMEMLIMIT=180MiB`).
+
+**Step 3. Grafana**
+- Loki added as a second provisioned data source.
+- A third dashboard, **MSS - Security**:
+
+| Panel | LogQL idea |
+|---|---|
+| Failed SSH logins per server | `sum by (server) (count_over_time({unit="ssh.service"} \|~ "Failed\|Invalid user" [5m]))` |
+| Successful SSH logins (who, from where) | `{unit="ssh.service"} \|= "Accepted"` |
+| Commands run with sudo | `{identifier="sudo"} \|= "COMMAND="` |
+| Rejected stream keys | `{log="publish-auth"} \|= "result=403"` |
+| Publisher connects / disconnects | `{log="rtmp-access"}` |
+| Website requests by status (2xx, 4xx, 5xx) | parsed from `{log="access"}` |
+| Top IPs getting 404s (scanners) | parsed from `{log="access"}` |
+| ffmpeg errors and restarts | `{unit="ffmpeg-stream.service"}` |
+| Live log of errors from all servers | `{level=~"err\|crit\|alert\|emerg"}` |
+
+**Step 4. Verify (live)**
+
+| Test | Expected |
+|---|---|
+| Publish with a **wrong key** (from the streamer, by hand) | A `result=403` line appears on the Security dashboard within seconds |
+| An SSH login, and an SSH login with a wrong user | Both appear, with the source IP |
+| Search Loki for `key=` followed by anything but `REDACTED` | Nothing, over the whole retention |
+| Stream after the ffmpeg change | Live; publish-auth `result=200`; bitrate unchanged on the Stream dashboard |
+| Memory and disk before/after on each server | Recorded; the t3.micro servers keep a safe margin |
+| Loki not reachable from outside its rules | gRPC refused from the network; 3100 only from the 2 subnets (already the security group) |
+| A second `terraform apply` | `changed=0` (idempotent) |
+| ansible-lint (production profile), Checkov | Pass |
+
+**Step 5. Document** in [MONITORING.md](MONITORING.md): how logs flow (push, not pull), the leak and its fix, the Security dashboard, the verification results.
+
+### What doesn't change
+- **No Terraform changes:** port 3100 is already open from both subnets to the monitoring server, and the IPs and password are already passed to Ansible.
+- No new connections beyond the planned ones: frontend → monitoring:3100 and streamer → monitoring:3100 (HTTP, inside the VPC). The monitoring server's own Alloy sends to itself.
+- The stream is only interrupted once, for a few seconds, when ffmpeg restarts with the new arguments.
+
+### Known limits (for M5)
+- Logs travel as **plain HTTP** inside the VPC, and Loki has **no authentication**: only the security groups protect it. M5 adds TLS and authentication.
+- The stream key is still on ffmpeg's command line on the streamer (visible to local processes there), as before M3.
 
 ---
 
@@ -287,10 +380,10 @@ The server is stopped every night with the others. `enable_monitoring = false` r
 
 | Risk | Mitigation |
 |---|---|
-| The agents slow the t3.micro servers | `node_exporter` uses ~15 MB, Alloy ~60–100 MB; measured in M2/M3. If too heavy, fall back to a lighter log shipper. |
+| The agents slow the t3.micro servers | `node_exporter` uses ~15 MB; Alloy is capped at 250 MB (`MemoryMax`) and measured in M3. If too heavy, fall back to a lighter log shipper. |
 | Software downloads fail or change | Pinned versions and SHA-256 checks; a failed check stops the deploy |
 | The streamer's ffmpeg sandbox interferes with the new agents | The agents are separate services; ffmpeg's network limits only apply to ffmpeg |
-| Logs expose sensitive data | Key-free log formats are already in place; Loki is private and only reachable from the two servers |
+| Logs expose sensitive data | Key-free log formats; ffmpeg's key leak fixed at the source (M3 step 0); Alloy redacts `key=…` as a second layer; Loki is private and only reachable from the two subnets |
 | Monitoring itself fails silently | The "server down" alert covers the other servers; Grafana's own health shows on its dashboard |
 
 ---

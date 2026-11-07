@@ -11,3 +11,14 @@ datasources:
     editable: false
     jsonData:
       timeInterval: 15s
+
+  # Logs: Loki listens on the private IP (the agents on the other servers
+  # push to it), so Grafana uses that address too
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://{{ monitoring_private_ip }}:3100
+    editable: false
+    jsonData:
+      maxLines: 1000

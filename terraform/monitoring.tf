@@ -4,6 +4,8 @@
 
 locals {
   monitoring_enabled = var.enable_monitoring
+  # The fixed password if one is set (secrets.auto.tfvars), else the generated one
+  grafana_admin_password = var.grafana_admin_password != null ? var.grafana_admin_password : try(random_password.grafana_admin[0].result, "")
   # 0 or 1 security-group IDs, for the rules the frontend and streamer groups
   # add toward the monitoring server (dynamic blocks in security.tf)
   monitoring_sg_ids = aws_security_group.monitoring[*].id
@@ -99,7 +101,8 @@ resource "aws_ec2_instance_state" "monitoring" {
   state       = "running"
 }
 
-# Grafana's admin password: generated, never written by hand or stored in git
+# Grafana's admin password when no fixed one is set: generated, never stored
+# in git
 resource "random_password" "grafana_admin" {
   count   = local.monitoring_enabled ? 1 : 0
   length  = 24

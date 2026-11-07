@@ -1,0 +1,84 @@
+// {{ ansible_managed }}
+// Alloy: reads this server's logs and pushes them to Loki on the monitoring
+// server. Every line gets the label server="{{ inventory_hostname }}" (the same
+// names as in Prometheus). See docs/MONITORING.md.
+
+logging {
+  level = "warn"
+}
+
+// ---- Send: to Loki on the monitoring server ----
+loki.write "monitoring" {
+  endpoint {
+    url = "http://{{ monitoring_private_ip }}:3100/loki/api/v1/push"
+  }
+  external_labels = { server = "{{ inventory_hostname }}" }
+}
+
+// ---- Safety net: hide any stream key before it leaves the server ----
+// ffmpeg no longer writes the key (it is passed with -rtmp_playpath), but any
+// "key=<value>" that still shows up is replaced by "key=REDACTED".
+loki.process "redact" {
+  stage.replace {
+    expression = "key=([A-Za-z0-9]+)"
+    replace    = "REDACTED"
+  }
+  forward_to = [loki.write.monitoring.receiver]
+}
+
+// ---- The systemd journal: SSH, sudo, services (ffmpeg, nginx...), updates ----
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal_syslog_identifier"]
+    target_label  = "identifier"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+}
+
+loki.source.journal "system" {
+  max_age       = "12h"
+  relabel_rules = loki.relabel.journal.rules
+  labels        = { job = "journal" }
+  forward_to    = [loki.process.redact.receiver]
+}
+{% if inventory_hostname in groups['frontend'] %}
+
+// ---- Frontend only: the nginx logs (not in the journal) ----
+// local.file_match looks for the files again every few seconds, so a file
+// that doesn't exist yet when Alloy starts is picked up later
+local.file_match "nginx" {
+  path_targets = [
+    { __path__ = "/var/log/nginx/access.log", job = "nginx", log = "access" },
+    { __path__ = "/var/log/nginx/error.log", job = "nginx", log = "error" },
+    { __path__ = "/var/log/nginx/publish-auth.log", job = "nginx", log = "publish-auth" },
+    { __path__ = "/var/log/nginx/rtmp-access.log", job = "nginx", log = "rtmp-access" },
+  ]
+}
+
+loki.source.file "nginx" {
+  targets    = local.file_match.nginx.targets
+  forward_to = [loki.process.nginx.receiver]
+}
+
+// Our own monitoring requests would bury real visitors and scanners: drop
+// the website probes from the monitoring server (2 every 15 s) and the
+// stream-metrics collector reading /stat on localhost (every 15 s)
+loki.process "nginx" {
+  stage.drop {
+    expression = `^{{ monitoring_private_ip | regex_escape }} .*Go-http-client`
+  }
+  stage.drop {
+    expression = `^127\.0\.0\.1 .*"GET /stat `
+  }
+  forward_to = [loki.process.redact.receiver]
+}
+{% endif %}

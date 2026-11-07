@@ -7,7 +7,7 @@ This guide explains [`ansible/site.yml`](../ansible/site.yml): the playbook that
 - [How the playbook is started](#how-the-playbook-is-started)
 - [Ansible vocabulary](#ansible-vocabulary)
 - [Settings used by every play](#settings-used-by-every-play)
-- [Overview: the 6 plays](#overview-the-6-plays)
+- [Overview: the 9 plays](#overview-the-9-plays)
 - [Play 1: package proxy on the frontend](#play-1-package-proxy-on-the-frontend)
 - [Play 2: point the streamer's apt at the proxy](#play-2-point-the-streamers-apt-at-the-proxy)
 - [Play 3: WireGuard keys on both servers](#play-3-wireguard-keys-on-both-servers)
@@ -83,16 +83,21 @@ The streamer has no public IP, so the inventory gives it a `ProxyCommand`. SSH h
 
 ---
 
-## Overview: the 6 plays
+## Overview: the 9 plays
 
 | Play | Runs on | Purpose | Lines |
 |---|---|---|---|
 | 1 | Frontend | Start the **package proxy** (apt-cacher-ng) | [4-42](../ansible/site.yml#L4-L42) |
-| 2 | Streamer | Tell the streamer's apt to **use that proxy** | [44-60](../ansible/site.yml#L44-L60) |
-| 3 | Both | Install WireGuard, create each server's keys, share the public keys | [62-93](../ansible/site.yml#L62-L93) |
-| 4 | Frontend | nginx + RTMP, HTTPS certificate, website, tunnel (listening end) | [95-378](../ansible/site.yml#L95-L378) |
-| 5 | Streamer | Video, tunnel (calling end), ffmpeg loop service | [380-480](../ansible/site.yml#L380-L480) |
-| 6 | Both | Turn on daily security updates, apply pending ones now, reboot if needed | [482-521](../ansible/site.yml#L482-L521) |
+| 2 | Streamer, monitoring | Tell the private servers' apt to **use that proxy**, then refresh the package lists | [44-74](../ansible/site.yml#L44-L74) |
+| 3 | Frontend, streamer | Install WireGuard, create each server's keys, share the public keys | [76-107](../ansible/site.yml#L76-L107) |
+| 4 | Frontend | nginx + RTMP, HTTPS certificate, website, tunnel (listening end) | [109-392](../ansible/site.yml#L109-L392) |
+| 5 | Streamer | Video, tunnel (calling end), ffmpeg loop service, removal of keys leaked into old logs | [394-530](../ansible/site.yml#L394-L530) |
+| 6 | All 3 | Turn on daily security updates, apply pending ones now, reboot if needed | [532-577](../ansible/site.yml#L532-L577) |
+| 7 | All 3 | **Metrics agents:** node_exporter; the stream-health collector on the frontend | [579-698](../ansible/site.yml#L579-L698) |
+| 8 | Monitoring | **Monitoring server:** Prometheus, blackbox_exporter, Loki, Grafana | [700-964](../ansible/site.yml#L700-L964) |
+| 9 | All 3 | **Log agents:** Alloy pushes each server's logs to Loki | [966-1071](../ansible/site.yml#L966-L1071) |
+
+Plays 7 to 9 (monitoring) are explained in [MONITORING.md](MONITORING.md). This guide details plays 1 to 6.
 
 **The order matters:**
 
@@ -272,9 +277,11 @@ On a **fresh** `terraform apply`, these tasks find nothing and change nothing. `
 | Upload video to the streamer | The laptop copies it over SSH, through the jump host. Notifies `Restart stream`. |
 | Configure WireGuard tunnel | Fills `wg0.conf.j2` again, as the **calling** side: the streamer's address is `10.99.0.2`, it doesn't listen, and its peer is the frontend (`10.99.0.1`) with `Endpoint = <frontend_private_ip>:51820` and `PersistentKeepalive = 25`. |
 | Start WireGuard tunnel | `wg-quick@wg0`, started now and at every boot |
-| Install stream key (root-only) | [`ffmpeg-stream.env.j2`](../ansible/templates/ffmpeg-stream.env.j2) → `/etc/ffmpeg-stream.env` (`STREAM_KEY=...`, mode `0600`). The key lives in a root-only file, **never on a command line**, where `ps` or logs could show it. |
-| Install streaming service | [`ffmpeg-stream.service.j2`](../ansible/templates/ffmpeg-stream.service.j2) → a **systemd service** that runs ffmpeg forever: it loops the video (`-stream_loop -1`), re-encodes it with `-preset veryfast`, and pushes it to `rtmp://10.99.0.1:1935/live/stream?key=$STREAM_KEY` **through the tunnel**. systemd restarts it if it stops. It runs **sandboxed**: as an unprivileged temporary user, with a read-only system, and allowed to connect only to `10.99.0.1` (see [TEMPLATES.md](TEMPLATES.md#the-sandbox-least-privilege-for-ffmpeg)). |
+| Install stream key (root-only) | [`ffmpeg-stream.env.j2`](../ansible/templates/ffmpeg-stream.env.j2) → `/etc/ffmpeg-stream.env` (`STREAM_KEY=...`, mode `0600`). The key lives in a root-only file, not in the world-readable service file. Note: systemd inserts it into ffmpeg's arguments when it starts ffmpeg, so `ps` on the streamer can show it; no other user works on that server. |
+| Install streaming service | [`ffmpeg-stream.service.j2`](../ansible/templates/ffmpeg-stream.service.j2) → a **systemd service** that runs ffmpeg forever: it loops the video (`-stream_loop -1`), re-encodes it with `-preset veryfast`, and pushes it to `rtmp://10.99.0.1:1935` (application `live`, stream `stream`; the key goes in `-rtmp_playpath`, so ffmpeg's error messages never show it) **through the tunnel**. systemd restarts it if it stops. It runs **sandboxed**: as an unprivileged temporary user, with a read-only system, and allowed to connect only to `10.99.0.1` (see [TEMPLATES.md](TEMPLATES.md#the-sandbox-least-privilege-for-ffmpeg)). |
 | Start streaming service | `daemon_reload` (re-read the service files), started now and at every boot |
+| Apply a new ffmpeg configuration now | Runs the pending "Restart stream" handler immediately, so the next task sees the new ffmpeg |
+| Remove stream keys leaked into old system logs | ffmpeg used to have the key in its URL and repeated it in error messages. If a real key (`key=` + letters/digits, not `REDACTED`) is found in the journal or `/var/log/syslog*`, the journal is archived and deleted and the key is replaced by `REDACTED` in the syslog files. Does nothing (`clean`) once the logs are clean. Runs before log shipping (play 9) can copy anything. |
 
 **Handlers:**
 - `Restart WireGuard`, when the tunnel config changes.

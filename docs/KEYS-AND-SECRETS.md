@@ -95,7 +95,8 @@ An attacker would **also** need to connect from the administrator's IP to reach 
 | **Type** | **Shared secret** (password): 32 random alphanumeric characters (about 190 bits) |
 | **Created by** | Terraform (`random_password.stream_key` in [`terraform/stream_key.tf`](../terraform/stream_key.tf)) |
 | **Stored** | See the table below |
-| **Sent over the network?** | ✅ Yes, in the RTMP URL (`rtmp://10.99.0.1:1935/live/stream?key=…`), but **only inside the WireGuard tunnel** |
+| **Sent over the network?** | ✅ Yes, in the RTMP publish request (stream name `stream?key=…`), but **only inside the WireGuard tunnel** |
+| **In logs?** | No. nginx logs a key-free format; ffmpeg gets the key with `-rtmp_playpath` so its error messages don't contain it (they used to: fixed, and the old lines replaced by `REDACTED`); the log agent (Alloy) also replaces any `key=…` with `key=REDACTED` before sending logs to Loki |
 
 **Where it's stored:**
 | Location | Notes |
