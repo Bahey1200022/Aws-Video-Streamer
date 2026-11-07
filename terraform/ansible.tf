@@ -5,6 +5,7 @@ locals {
     ["site.yml", "ansible.cfg"],
     tolist(fileset(local.ansible_dir, "templates/*")),
     tolist(fileset(local.ansible_dir, "group_vars/*")),
+    tolist(fileset(local.ansible_dir, "dashboards/*")),
   ))
 }
 
@@ -22,6 +23,9 @@ resource "local_file" "inventory" {
     letsencrypt_staging = var.letsencrypt_staging
     acme_challenge      = var.acme_challenge
     stream_key          = random_password.stream_key.result
+    # Monitoring server (null when enable_monitoring = false)
+    monitoring_private_ip  = try(aws_instance.monitoring[0].private_ip, null)
+    grafana_admin_password = try(random_password.grafana_admin[0].result, "")
   })
 }
 
@@ -31,6 +35,7 @@ resource "terraform_data" "ansible" {
   triggers_replace = [
     aws_instance.frontend.id,
     aws_instance.streamer.id,
+    try(aws_instance.monitoring[0].id, ""),
     local_file.inventory.content,
     sha1(join("", [for f in local.ansible_sources : filesha1("${local.ansible_dir}/${f}")])),
   ]
@@ -50,6 +55,8 @@ resource "terraform_data" "ansible" {
     aws_security_group.frontend,
     aws_security_group.streamer,
     aws_ec2_instance_state.streamer,
+    aws_ec2_instance_state.monitoring,
+    aws_security_group.monitoring,
     aws_route53_record.frontend,
   ]
 }

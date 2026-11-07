@@ -13,3 +13,33 @@ video_dir: /videos
 
 # Let's Encrypt certificate name (staging certificates are kept separate)
 cert_name: "{{ fqdn }}{{ '-staging' if letsencrypt_staging | bool else '' }}"
+
+# --- Monitoring (docs/MONITORING-PLAN.md) ---
+# Software not in Ubuntu's repositories is downloaded on the control machine,
+# checked against these pinned SHA-256 checksums, and uploaded (the private
+# subnet has no internet). Version rule: the latest patch of the newest minor
+# version that has been out for at least two weeks.
+# Checksums: GitHub's release digests, cross-checked with dl.grafana.com
+# (Grafana) and the release's SHA256SUMS file (Alloy). Loki's SHA256SUMS only
+# covers its .zip files, so its .deb is pinned to GitHub's digest alone.
+grafana_version: "13.2.5"
+grafana_deb: grafana_13.2.5_40359240686_linux_amd64.deb
+grafana_url: https://github.com/grafana/grafana/releases/download/v13.2.5/grafana_13.2.5_40359240686_linux_amd64.deb
+grafana_sha256: 3c8d7874f2e14120044c3f131a47c25bd9412e449f9037e298bc6419630c73b7
+
+loki_version: "3.7.9"
+loki_deb: loki_3.7.9_amd64.deb
+loki_url: https://github.com/grafana/loki/releases/download/v3.7.9/loki_3.7.9_amd64.deb
+loki_sha256: 9647b50011ea4eb6d44b82bf708b3eb4fa5d837b33a52741cdda5f912f6cd45d
+
+alloy_version: "1.21.3"
+alloy_deb: alloy-1.21.3-1.amd64.deb
+alloy_url: https://github.com/grafana/alloy/releases/download/v1.21.3/alloy-1.21.3-1.amd64.deb
+alloy_sha256: dbbd705de8ab37dec0cbd6361a3fc7e754d6b2854b57ce672a83e6366199ba73
+
+# How long metrics and logs are kept
+monitoring_retention_days: 15
+
+# Services whose state node_exporter reports (systemd collector)
+monitored_units: "(nginx|wg-quick@wg0|apt-cacher-ng|ffmpeg-stream|prometheus|prometheus-node-exporter|prometheus-blackbox-exporter|grafana-server|loki|alloy|mss-stream-metrics)[.]service"
+site_scheme: "{{ 'https' if enable_tls | bool else 'http' }}"

@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+# Dashboards, provisioned as code from the JSON files in ansible/dashboards/
+apiVersion: 1
+providers:
+  - name: mss
+    folder: MSS
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards/mss

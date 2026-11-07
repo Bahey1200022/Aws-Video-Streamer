@@ -41,8 +41,8 @@
         name: apt-cacher-ng
         state: restarted
 
-- name: Point the streamer's apt at the frontend's proxy
-  hosts: streamer
+- name: Point the private servers' apt at the frontend's proxy
+  hosts: streamer:monitoring
   become: true
   gather_facts: false
   tasks:
@@ -50,7 +50,11 @@
       ansible.builtin.wait_for_connection:
         timeout: 300
 
-    - name: Use the frontend's package proxy (the streamer has no internet)
+    - name: Wait for cloud-init (apt locks)
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+
+    - name: Use the frontend's package proxy (no internet in the private subnet)
       ansible.builtin.copy:
         dest: /etc/apt/apt.conf.d/01proxy
         content: |
@@ -59,8 +63,16 @@
           Acquire::http::Proxy "http://{{ frontend_private_ip }}:3142";
         mode: "0644"
 
-- name: WireGuard keys (both hosts)
-  hosts: all
+    # A new server has never downloaded its package lists (cloud-init tried
+    # the internet, which the private subnet doesn't have), so apt knows no
+    # packages until it refreshes them once through the proxy
+    - name: Refresh the package lists through the proxy
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+- name: WireGuard keys (frontend and streamer)
+  hosts: frontend:streamer
   become: true
   gather_facts: false
   tasks:
@@ -520,3 +532,304 @@
       ansible.builtin.reboot:
         reboot_timeout: 600
       when: reboot_required.stat.exists
+
+# Monitoring agents. node_exporter publishes each server's metrics (CPU,
+# memory, disk, network, services, pending updates) on its PRIVATE address
+# only, for Prometheus on the monitoring server to scrape. The frontend also
+# runs a small collector for the stream's health. Skipped when the monitoring
+# server is disabled (enable_monitoring = false in Terraform).
+- name: Monitoring agents (all servers)
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    textfile_dir: /var/lib/prometheus/node-exporter
+    node_exporter_address: >-
+      {{ '127.0.0.1' if inventory_hostname in groups.get('monitoring', [])
+         else (frontend_private_ip if inventory_hostname in groups['frontend'] else ansible_host) }}
+    node_exporter_args: >-
+      --web.listen-address={{ node_exporter_address }}:9100
+      --collector.systemd
+      --collector.systemd.unit-include={{ monitored_units }}
+      --collector.textfile.directory={{ textfile_dir }}
+  tasks:
+    - name: Monitoring agents
+      when: groups.get('monitoring', []) | length > 0
+      block:
+        - name: Install node_exporter (and its apt / reboot-required collectors)
+          ansible.builtin.apt:
+            name: prometheus-node-exporter
+
+        - name: Configure node_exporter (private address, services, textfile metrics)
+          ansible.builtin.copy:
+            dest: /etc/default/prometheus-node-exporter
+            content: |
+              # Installed by Ansible
+              ARGS="{{ node_exporter_args }}"
+            mode: "0644"
+          notify: Restart node_exporter
+
+        - name: Start node_exporter
+          ansible.builtin.systemd:
+            name: prometheus-node-exporter
+            state: started
+            enabled: true
+
+        - name: Stream metrics collector (frontend)
+          when: inventory_hostname in groups['frontend']
+          block:
+            # The package creates this folder as root-only (its apt.prom is
+            # written by a root timer). The collector runs as the unprivileged
+            # prometheus user, so the group gets write access - nothing more
+            - name: Let the collector write its file in the textfile folder
+              ansible.builtin.file:
+                path: "{{ textfile_dir }}"
+                state: directory
+                owner: root
+                group: prometheus
+                mode: "0775"
+
+            - name: Install the stream metrics script
+              ansible.builtin.template:
+                src: mss-stream-metrics.py.j2
+                dest: /usr/local/bin/mss-stream-metrics
+                mode: "0755"
+
+            - name: Install the stream metrics service (sandboxed)
+              ansible.builtin.copy:
+                dest: /etc/systemd/system/mss-stream-metrics.service
+                content: |
+                  # Installed by Ansible
+                  [Unit]
+                  Description=MSS stream metrics for node_exporter (chunk age, publisher, bitrate)
+
+                  [Service]
+                  Type=oneshot
+                  User=prometheus
+                  ExecStart=/usr/local/bin/mss-stream-metrics
+                  # Only needs to read the HLS folder, ask nginx-rtmp on
+                  # localhost, and write one file
+                  NoNewPrivileges=yes
+                  CapabilityBoundingSet=
+                  ProtectSystem=strict
+                  ReadWritePaths={{ textfile_dir }}
+                  ProtectHome=yes
+                  PrivateTmp=yes
+                  PrivateDevices=yes
+                  ProtectKernelTunables=yes
+                  ProtectKernelModules=yes
+                  ProtectControlGroups=yes
+                  RestrictAddressFamilies=AF_INET
+                  IPAddressDeny=any
+                  IPAddressAllow=localhost
+                mode: "0644"
+
+            - name: Run it every 15 seconds
+              ansible.builtin.copy:
+                dest: /etc/systemd/system/mss-stream-metrics.timer
+                content: |
+                  # Installed by Ansible
+                  [Unit]
+                  Description=Collect MSS stream metrics every 15 seconds
+
+                  [Timer]
+                  OnBootSec=30s
+                  OnUnitActiveSec=15s
+                  AccuracySec=1s
+
+                  [Install]
+                  WantedBy=timers.target
+                mode: "0644"
+
+            - name: Start the stream metrics timer
+              ansible.builtin.systemd:
+                name: mss-stream-metrics.timer
+                state: started
+                enabled: true
+                daemon_reload: true
+
+  handlers:
+    - name: Restart node_exporter
+      ansible.builtin.systemd:
+        name: prometheus-node-exporter
+        state: restarted
+
+# The monitoring server: Prometheus (metrics), blackbox_exporter (probes the
+# website like a viewer) and Grafana (dashboards). Everything listens on
+# localhost only; Grafana is reached through an SSH tunnel (Terraform output
+# "grafana_tunnel"). Grafana isn't in Ubuntu's repositories: it is downloaded
+# on the control machine, checked against its pinned SHA-256, and uploaded.
+- name: Monitoring server (Prometheus, blackbox_exporter, Grafana)
+  hosts: monitoring
+  become: true
+  gather_facts: false
+  vars:
+    package_dir: /var/cache/mss-packages
+  tasks:
+    - name: Install Prometheus and blackbox_exporter
+      ansible.builtin.apt:
+        name: [prometheus, prometheus-blackbox-exporter]
+
+    - name: Prometheus settings (localhost only, retention)
+      ansible.builtin.copy:
+        dest: /etc/default/prometheus
+        content: |
+          # Installed by Ansible
+          ARGS="--web.listen-address=127.0.0.1:9090 --storage.tsdb.retention.time={{ monitoring_retention_days }}d"
+        mode: "0644"
+      notify: Restart Prometheus
+
+    - name: Prometheus scrape targets
+      ansible.builtin.template:
+        src: prometheus.yml.j2
+        dest: /etc/prometheus/prometheus.yml
+        mode: "0644"
+        validate: promtool check config %s
+      notify: Restart Prometheus
+
+    - name: Settings for blackbox_exporter (localhost only)
+      ansible.builtin.copy:
+        dest: /etc/default/prometheus-blackbox-exporter
+        content: |
+          # Installed by Ansible
+          ARGS="--config.file=/etc/prometheus/blackbox.yml --web.listen-address=127.0.0.1:9115"
+        mode: "0644"
+      notify: Restart blackbox_exporter
+
+    - name: Website probes
+      ansible.builtin.template:
+        src: blackbox.yml.j2
+        dest: /etc/prometheus/blackbox.yml
+        mode: "0644"
+      notify: Restart blackbox_exporter
+
+    - name: Download Grafana on the control machine (checksum verified)
+      ansible.builtin.get_url:
+        url: "{{ grafana_url }}"
+        dest: "{{ playbook_dir }}/files/{{ grafana_deb }}"
+        checksum: "sha256:{{ grafana_sha256 }}"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+      run_once: true # noqa: run-once[task]
+
+    - name: Create the package folder
+      ansible.builtin.file:
+        path: "{{ package_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Upload Grafana
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/files/{{ grafana_deb }}"
+        dest: "{{ package_dir }}/{{ grafana_deb }}"
+        mode: "0644"
+
+    - name: Install Grafana (its dependencies come through the package proxy)
+      ansible.builtin.apt:
+        deb: "{{ package_dir }}/{{ grafana_deb }}"
+
+    - name: Grafana settings (root-only, it holds the admin password)
+      ansible.builtin.template:
+        src: grafana.env.j2
+        dest: /etc/grafana/mss.env
+        owner: root
+        group: root
+        mode: "0600"
+      notify: Restart Grafana
+
+    - name: Create the Grafana drop-in folder
+      ansible.builtin.file:
+        path: /etc/systemd/system/grafana-server.service.d
+        state: directory
+        mode: "0755"
+
+    - name: Load the settings into Grafana's service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/grafana-server.service.d/mss.conf
+        content: |
+          # Installed by Ansible
+          [Service]
+          EnvironmentFile=/etc/grafana/mss.env
+        mode: "0644"
+      notify: Restart Grafana
+
+    - name: Provision the data sources
+      ansible.builtin.template:
+        src: grafana-datasources.yml.j2
+        dest: /etc/grafana/provisioning/datasources/mss.yml
+        owner: root
+        group: grafana
+        mode: "0640"
+      notify: Restart Grafana
+
+    - name: Provision the dashboards
+      ansible.builtin.template:
+        src: grafana-dashboards.yml.j2
+        dest: /etc/grafana/provisioning/dashboards/mss.yml
+        owner: root
+        group: grafana
+        mode: "0640"
+      notify: Restart Grafana
+
+    - name: Create the dashboards folder
+      ansible.builtin.file:
+        path: /var/lib/grafana/dashboards/mss
+        state: directory
+        mode: "0755"
+
+    # Grafana re-reads this folder every 10 seconds: no restart needed
+    - name: Install the dashboards
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/dashboards/"
+        dest: /var/lib/grafana/dashboards/mss/
+        mode: "0644"
+
+    - name: Start the monitoring services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+        daemon_reload: true
+      loop:
+        - prometheus
+        - prometheus-blackbox-exporter
+        - grafana-server
+
+    - name: Apply pending restarts before checking Grafana
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for Grafana
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 3000
+        timeout: 120
+
+    # The password in mss.env only applies when Grafana first creates its
+    # database. Resetting it on every run makes a new Terraform password take
+    # effect. Passed on stdin, never on the command line.
+    - name: Set the Grafana admin password
+      ansible.builtin.command:
+        cmd: grafana cli --homepath /usr/share/grafana --config /etc/grafana/grafana.ini admin reset-admin-password --password-from-stdin
+        stdin: "{{ grafana_admin_password }}"
+      become: true
+      become_user: grafana
+      no_log: true
+      changed_when: false
+
+  handlers:
+    - name: Restart Prometheus
+      ansible.builtin.systemd:
+        name: prometheus
+        state: restarted
+
+    - name: Restart blackbox_exporter
+      ansible.builtin.systemd:
+        name: prometheus-blackbox-exporter
+        state: restarted
+
+    - name: Restart Grafana
+      ansible.builtin.systemd:
+        name: grafana-server
+        state: restarted
+        daemon_reload: true

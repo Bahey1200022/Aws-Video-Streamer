@@ -75,3 +75,15 @@ variable "letsencrypt_staging" {
   type        = bool
   default     = false
 }
+
+variable "enable_monitoring" {
+  description = "Create the monitoring server (Prometheus, Loki, Grafana) in the private subnet"
+  type        = bool
+  default     = true
+}
+
+variable "monitoring_instance_type" {
+  description = "Instance type of the monitoring server (Prometheus + Loki + Grafana need about 1 GB of RAM)"
+  type        = string
+  default     = "t3.small"
+}

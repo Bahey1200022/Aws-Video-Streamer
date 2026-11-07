@@ -44,6 +44,7 @@ ffmpeg loops the film                                       nginx-rtmp → HLS/D
 | `docs/PLAYBOOK.md` | The Ansible playbook explained play by play |
 | `docs/TEMPLATES.md` | The 6 configuration templates explained file by file |
 | `docs/SECURITY-FIXES.md` | Three weaknesses found by a self-audit: problem, fix, before/after evidence |
+| `docs/MONITORING-PLAN.md` | Plan (not built yet) for monitoring, logs and alerts on a 3rd private server |
 | `.pre-commit-config.yaml` | Runs **gitleaks** on the developer's machine **before every commit**, so a secret never even enters git |
 | `.github/workflows/security.yml` | The **security pipeline**: on every push and pull request, GitHub runs 4 jobs (Terraform fmt/validate, Checkov, gitleaks, ansible-lint). Any problem turns the run red. |
 

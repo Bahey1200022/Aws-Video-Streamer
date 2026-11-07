@@ -46,6 +46,19 @@ resource "aws_security_group" "frontend" {
     cidr_blocks = [local.admin_cidr]
   }
 
+  # Monitoring (only when enable_monitoring = true): Prometheus scrapes
+  # node_exporter here; Alloy pushes this server's logs to Loki
+  dynamic "ingress" {
+    for_each = local.monitoring_sg_ids
+    content {
+      description     = "node_exporter scraped by Prometheus (monitoring server)"
+      from_port       = 9100
+      to_port         = 9100
+      protocol        = "tcp"
+      security_groups = [ingress.value]
+    }
+  }
+
   # Egress is limited to what the frontend needs, so a compromised process
   # can't reach out on arbitrary ports. Amazon DNS, NTP and the metadata
   # service are not filtered by security groups.
@@ -72,6 +85,17 @@ resource "aws_security_group" "frontend" {
     protocol    = "tcp"
     cidr_blocks = [data.aws_subnet.private.cidr_block]
   }
+
+  dynamic "egress" {
+    for_each = local.monitoring_sg_ids
+    content {
+      description     = "Logs pushed to Loki (monitoring server)"
+      from_port       = 3100
+      to_port         = 3100
+      protocol        = "tcp"
+      security_groups = [egress.value]
+    }
+  }
 }
 
 resource "aws_security_group" "streamer" {
@@ -87,6 +111,17 @@ resource "aws_security_group" "streamer" {
     security_groups = [aws_security_group.frontend.id]
   }
 
+  dynamic "ingress" {
+    for_each = local.monitoring_sg_ids
+    content {
+      description     = "node_exporter scraped by Prometheus (monitoring server)"
+      from_port       = 9100
+      to_port         = 9100
+      protocol        = "tcp"
+      security_groups = [ingress.value]
+    }
+  }
+
   egress {
     description = "WireGuard tunnel to the frontend"
     from_port   = 51820
@@ -95,12 +130,24 @@ resource "aws_security_group" "streamer" {
     cidr_blocks = [data.aws_subnet.public.cidr_block]
   }
 
-  # The streamer may only talk to the frontend: no internet at all
+  # The streamer may only talk to the frontend (and send its logs to the
+  # monitoring server): no internet at all
   egress {
     description = "Package proxy on the frontend (apt-cacher-ng)"
     from_port   = 3142
     to_port     = 3142
     protocol    = "tcp"
     cidr_blocks = [data.aws_subnet.public.cidr_block]
+  }
+
+  dynamic "egress" {
+    for_each = local.monitoring_sg_ids
+    content {
+      description     = "Logs pushed to Loki (monitoring server)"
+      from_port       = 3100
+      to_port         = 3100
+      protocol        = "tcp"
+      security_groups = [egress.value]
+    }
   }
 }

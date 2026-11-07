@@ -11,6 +11,10 @@ all:
     letsencrypt_staging: ${letsencrypt_staging}
     acme_challenge: ${acme_challenge}
     stream_key: ${stream_key}
+%{ if monitoring_private_ip != null ~}
+    monitoring_private_ip: ${monitoring_private_ip}
+    grafana_admin_password: ${grafana_admin_password}
+%{ endif ~}
   children:
     frontend:
       hosts:
@@ -24,3 +28,13 @@ all:
           ansible_ssh_common_args: >-
             -o ProxyCommand="ssh -i ${key_file} -o StrictHostKeyChecking=no
             -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@${frontend_public_ip}"
+%{ if monitoring_private_ip != null ~}
+    monitoring:
+      hosts:
+        monitoring:
+          ansible_host: ${monitoring_private_ip}
+          # No public IP either: jump through the frontend
+          ansible_ssh_common_args: >-
+            -o ProxyCommand="ssh -i ${key_file} -o StrictHostKeyChecking=no
+            -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@${frontend_public_ip}"
+%{ endif ~}

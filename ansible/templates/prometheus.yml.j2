@@ -1,0 +1,47 @@
+# {{ ansible_managed }}
+# Prometheus scrapes (pulls) every target every 15 s. A target that stops
+# answering gets up == 0, which is how "server down" is detected.
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Server health: node_exporter on every server
+  - job_name: node
+    static_configs:
+      - targets: ["{{ frontend_private_ip }}:9100"]
+        labels: { server: web-frontend }
+      - targets: ["{{ hostvars['video-streamer'].ansible_host }}:9100"]
+        labels: { server: video-streamer }
+      - targets: ["127.0.0.1:9100"]
+        labels: { server: monitoring }
+
+  # The monitoring tools themselves
+  - job_name: prometheus
+    static_configs:
+      - targets: ["127.0.0.1:9090"]
+        labels: { server: monitoring }
+  - job_name: blackbox_exporter
+    static_configs:
+      - targets: ["127.0.0.1:9115"]
+        labels: { server: monitoring }
+
+  # The website as a viewer sees it: blackbox_exporter fetches the pages over
+  # the private network, with the real host name (TLS is checked against it)
+  - job_name: website
+    metrics_path: /probe
+    params:
+      module: [{{ 'https_site' if enable_tls | bool else 'http_site' }}]
+    static_configs:
+      - targets: ["{{ site_scheme }}://{{ frontend_private_ip }}/"]
+        labels: { page: home }
+      - targets: ["{{ site_scheme }}://{{ frontend_private_ip }}/hls/stream.m3u8"]
+        labels: { page: hls-playlist }
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: target
+      - target_label: __address__
+        replacement: 127.0.0.1:9115

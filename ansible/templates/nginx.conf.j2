@@ -60,6 +60,12 @@ http {
         location /control {
             rtmp_control all;
         }
+
+        # Stream statistics (XML: publisher, bitrate, clients), read every
+        # 15 s by the mss-stream-metrics collector for the monitoring
+        location /stat {
+            rtmp_stat all;
+        }
     }
 }
 

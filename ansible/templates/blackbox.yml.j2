@@ -1,0 +1,28 @@
+# {{ ansible_managed }}
+# Probes of the website, used by the "website" job in prometheus.yml.
+# The targets are the frontend's private IP (this server has no internet), so
+# the real host name is sent in the Host header and checked against the
+# certificate (tls_config.server_name).
+modules:
+  https_site:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      preferred_ip_protocol: ip4
+      valid_status_codes: [200]
+      fail_if_not_ssl: true
+      headers:
+        Host: "{{ fqdn }}"
+      tls_config:
+        server_name: "{{ fqdn }}"
+
+  http_site:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      preferred_ip_protocol: ip4
+      valid_status_codes: [200]
+      headers:
+        Host: "{{ fqdn }}"

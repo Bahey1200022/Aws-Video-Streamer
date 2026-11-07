@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+# {{ ansible_managed }}
+"""Stream health metrics for Prometheus (node_exporter textfile collector).
+
+Run every 15 s by mss-stream-metrics.timer. Writes
+{{ textfile_dir }}/mss_stream.prom atomically, so node_exporter never reads a
+half-written file. Needs no open port: node_exporter publishes the file.
+"""
+import os
+import time
+import urllib.request
+import xml.etree.ElementTree as ET
+
+HLS_DIR = "/var/www/html/stream/hls"
+STAT_URL = "http://127.0.0.1:8080/stat"   # nginx-rtmp statistics, localhost only
+OUT = "{{ textfile_dir }}/mss_stream.prom"
+
+
+def newest_chunk_age():
+    """Seconds since the newest HLS chunk was written (-1 if there is none)."""
+    try:
+        times = [e.stat().st_mtime for e in os.scandir(HLS_DIR) if e.name.endswith(".ts")]
+    except OSError:
+        return -1
+    return time.time() - max(times) if times else -1
+
+
+def rtmp_stats():
+    """Publisher state, incoming bitrate and RTMP clients of the 'stream' stream."""
+    stats = {"up": 0, "publishing": 0, "bw_in": 0, "clients": 0}
+    try:
+        with urllib.request.urlopen(STAT_URL, timeout=3) as r:
+            root = ET.fromstring(r.read())
+        stats["up"] = 1
+    except Exception:
+        return stats
+    for stream in root.iter("stream"):
+        if stream.findtext("name") != "stream":
+            continue
+        stats["publishing"] = 1 if stream.find("publishing") is not None else 0
+        stats["bw_in"] = int(stream.findtext("bw_in") or 0)
+        stats["clients"] = int(stream.findtext("nclients") or 0)
+    return stats
+
+
+def main():
+    age = newest_chunk_age()
+    s = rtmp_stats()
+    lines = [
+        "# HELP mss_hls_newest_chunk_age_seconds Seconds since the newest HLS chunk was written (-1: none).",
+        "# TYPE mss_hls_newest_chunk_age_seconds gauge",
+        f"mss_hls_newest_chunk_age_seconds {age:.1f}",
+        "# HELP mss_rtmp_stat_up 1 if nginx-rtmp's statistics page answered.",
+        "# TYPE mss_rtmp_stat_up gauge",
+        f"mss_rtmp_stat_up {s['up']}",
+        "# HELP mss_rtmp_publishing 1 if a publisher is sending the stream.",
+        "# TYPE mss_rtmp_publishing gauge",
+        f"mss_rtmp_publishing {s['publishing']}",
+        "# HELP mss_rtmp_bandwidth_in_bits Incoming bitrate of the stream, bits per second.",
+        "# TYPE mss_rtmp_bandwidth_in_bits gauge",
+        f"mss_rtmp_bandwidth_in_bits {s['bw_in']}",
+        "# HELP mss_rtmp_clients RTMP clients connected to the stream (the publisher included).",
+        "# TYPE mss_rtmp_clients gauge",
+        f"mss_rtmp_clients {s['clients']}",
+    ]
+    tmp = OUT + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.replace(tmp, OUT)
+
+
+if __name__ == "__main__":
+    main()
