@@ -82,6 +82,12 @@ variable "enable_monitoring" {
   default     = true
 }
 
+variable "enable_phone_camera" {
+  description = "Let a phone publish a second channel (\"phone\") through its own WireGuard tunnel. Opens UDP 51820 on the frontend to the internet"
+  type        = bool
+  default     = true
+}
+
 variable "monitoring_instance_type" {
   description = "Instance type of the monitoring server (Prometheus + Loki + Grafana need about 1 GB of RAM)"
   type        = string

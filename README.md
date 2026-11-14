@@ -11,7 +11,7 @@ to browsers.
 - **Terraform** builds the AWS infrastructure.
 - **Ansible**, launched by Terraform, configures the software on both servers.
 
-For a file-by-file explanation of how everything works, see [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md). Every key and secret is described in [docs/KEYS-AND-SECRETS.md](docs/KEYS-AND-SECRETS.md), the Ansible playbook play by play in [docs/PLAYBOOK.md](docs/PLAYBOOK.md), the configuration templates in [docs/TEMPLATES.md](docs/TEMPLATES.md), the fixes from a security self-audit in [docs/SECURITY-FIXES.md](docs/SECURITY-FIXES.md), how the monitoring works in [docs/MONITORING.md](docs/MONITORING.md), and its full plan in [docs/MONITORING-PLAN.md](docs/MONITORING-PLAN.md).
+For a file-by-file explanation of how everything works, see [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md). Every key and secret is described in [docs/KEYS-AND-SECRETS.md](docs/KEYS-AND-SECRETS.md), the Ansible playbook play by play in [docs/PLAYBOOK.md](docs/PLAYBOOK.md), the configuration templates in [docs/TEMPLATES.md](docs/TEMPLATES.md), the fixes from a security self-audit in [docs/SECURITY-FIXES.md](docs/SECURITY-FIXES.md), how the monitoring works in [docs/MONITORING.md](docs/MONITORING.md), its full plan in [docs/MONITORING-PLAN.md](docs/MONITORING-PLAN.md), and streaming from a phone in [docs/PHONE-CAMERA.md](docs/PHONE-CAMERA.md).
 
 ---
 
@@ -102,7 +102,7 @@ For a file-by-file explanation of how everything works, see [docs/HOW-IT-WORKS.m
 |---|---|---|
 | Frontend | TCP 80, 443 | Anywhere (viewers) |
 | Frontend | TCP 22 | **Your current public IP only** (auto-detected) |
-| Frontend | UDP 51820 | Private subnet only (WireGuard) |
+| Frontend | UDP 51820 | Private subnet (WireGuard from the streamer); **anywhere** when the phone camera is enabled (WireGuard ignores unknown keys) |
 | Frontend | TCP 3142 | Private subnet only (package proxy for the streamer) |
 | Streamer | TCP 22 | Frontend security group only (jump host) |
 

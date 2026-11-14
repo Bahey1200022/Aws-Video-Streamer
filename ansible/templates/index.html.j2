@@ -84,7 +84,7 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>{{ page_title }}, live <small>{{ fqdn if fqdn != '_' else 'MSS streaming platform' }}</small></h1>
+    <h1><span id="ch-title">{{ page_channels[0].title | e }}</span>, live <small>{{ fqdn if fqdn != '_' else 'MSS streaming platform' }}</small></h1>
     <span id="badge" class="badge wait"><span class="dot"></span><span id="badge-text">CONNECTING</span></span>
   </header>
 
@@ -99,6 +99,14 @@
       </div>
 
       <div class="toolbar">
+{% if page_channels | length > 1 %}
+        <div class="seg" role="group" aria-label="Channel">
+{% for ch in page_channels %}
+          <button class="ch" data-channel="{{ ch.name }}" data-title="{{ ch.title | e }}" data-source="{{ ch.source | e }}" data-buffer="{{ ch.buffer | default('') }}"
+                  aria-pressed="{{ 'true' if loop.first else 'false' }}">{{ ch.label | e }}</button>
+{% endfor %}
+        </div>
+{% endif %}
         <div class="seg" role="group" aria-label="Streaming format">
           <button id="btn-hls" aria-pressed="true">HLS</button>
           <button id="btn-dash" aria-pressed="false">DASH</button>
@@ -106,8 +114,8 @@
         <button id="btn-live" class="btn" title="Jump to the live edge">Go live</button>
         <span class="spacer"></span>
         <span class="links">
-          <a href="/hls/{{ page_channel }}.m3u8">{{ page_channel }}.m3u8</a>
-          <a href="/dash/{{ page_channel }}.mpd">{{ page_channel }}.mpd</a>
+          <a id="link-hls" href="/hls/{{ page_channels[0].name }}.m3u8">{{ page_channels[0].name }}.m3u8</a>
+          <a id="link-dash" href="/dash/{{ page_channels[0].name }}.mpd">{{ page_channels[0].name }}.mpd</a>
         </span>
       </div>
     </main>
@@ -128,10 +136,10 @@
       <section class="card">
         <h2>Pipeline</h2>
         <ul class="pipeline">
-          <li>ffmpeg on the Video Streamer</li>
+          <li id="pipe-source">{{ page_channels[0].source | e }}</li>
           <li>RTMP + stream key <span class="lock">WireGuard 🔒</span></li>
           <li>nginx-rtmp on the Web Frontend</li>
-          <li>HLS (3 s) · DASH (15 s) chunks</li>
+          <li>HLS (2 s) · DASH (15 s) chunks</li>
           <li>Your browser</li>
         </ul>
       </section>
@@ -141,14 +149,13 @@
   <footer>MSS · Cloud Automation &amp; Infrastructure as Code · deployed with Terraform + Ansible</footer>
 </div>
 
-<script>window.MSS_CHANNEL = "{{ page_channel }}";</script>
+<script>window.MSS_CHANNEL = "{{ page_channels[0].name }}";</script>
 {% raw %}
 <script>
 (() => {
-  const SOURCES = {
-    hls: '/hls/' + window.MSS_CHANNEL + '.m3u8',
-    dash: '/dash/' + window.MSS_CHANNEL + '.mpd',
-  };
+  let channel = window.MSS_CHANNEL;
+  let buffer = 0;   // seconds behind live for this channel; 0 = the default (2 chunks)
+  const source = (fmt) => fmt === 'hls' ? '/hls/' + channel + '.m3u8' : '/dash/' + channel + '.mpd';
   const DASHJS = {
     src: 'https://cdn.jsdelivr.net/npm/dashjs@4.7.4/dist/dash.all.min.js',
     integrity: 'sha384-fl7i8WZxcPlF9b1503+Gm+izr/2hpilydj0i/DlQTIafROZ1NP4rAWjyl6p3s1ev',
@@ -175,6 +182,8 @@
 
   function scheduleRetry(reason) {
     setBadge('off');
+    // The phone only streams when someone films: say so instead of an error
+    if (channel === 'phone') reason = 'The phone camera is not streaming right now.';
     showOverlay(reason + ' Retrying…');
     clearTimeout(retryTimer);
     retryTimer = setTimeout(start, RETRY_MS);
@@ -203,14 +212,21 @@
 
   function startHls() {
     if (window.Hls && Hls.isSupported()) {
-      hls = new Hls({ liveSyncDurationCount: 3, manifestLoadingMaxRetry: 2 });
+      // Steady channel: play 2 chunks (about 4 s) behind live, and jump
+      // forward if a stall leaves playback more than 5 chunks behind.
+      // Channel with a buffer (the phone): stay that many seconds behind.
+      // (hls.js refuses a mix of the two kinds of setting)
+      const live = buffer
+        ? { liveSyncDuration: buffer, liveMaxLatencyDuration: buffer * 2 }
+        : { liveSyncDurationCount: 2, liveMaxLatencyDurationCount: 5 };
+      hls = new Hls({ ...live, manifestLoadingMaxRetry: 2 });
       hls.on(Hls.Events.ERROR, (_, data) => {
         if (data.fatal) scheduleRetry('Stream unavailable.');
       });
-      hls.loadSource(SOURCES.hls);
+      hls.loadSource(source('hls'));
       hls.attachMedia(video);
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = SOURCES.hls;                    // Safari plays HLS natively
+      video.src = source('hls');                  // Safari plays HLS natively
     } else {
       showOverlay('This browser cannot play HLS. Try DASH.');
     }
@@ -225,7 +241,7 @@
     dash = dashjs.MediaPlayer().create();
     dash.updateSettings({ streaming: { delay: { liveDelay: 30 } } });
     dash.on(dashjs.MediaPlayer.events.ERROR, () => scheduleRetry('Stream unavailable.'));
-    dash.initialize(video, SOURCES.dash, true);
+    dash.initialize(video, source('dash'), true);
   }
 
   function start() {
@@ -241,6 +257,21 @@
     format = next;
     $('btn-hls').setAttribute('aria-pressed', String(next === 'hls'));
     $('btn-dash').setAttribute('aria-pressed', String(next === 'dash'));
+    start();
+  }
+
+  function selectChannel(button) {
+    if (button.dataset.channel === channel) return;
+    channel = button.dataset.channel;
+    buffer = Number(button.dataset.buffer) || 0;
+    document.querySelectorAll('button.ch').forEach((b) =>
+      b.setAttribute('aria-pressed', String(b === button)));
+    $('ch-title').textContent = button.dataset.title;
+    $('pipe-source').textContent = button.dataset.source;
+    $('link-hls').href = source('hls');
+    $('link-hls').textContent = channel + '.m3u8';
+    $('link-dash').href = source('dash');
+    $('link-dash').textContent = channel + '.mpd';
     start();
   }
 
@@ -280,6 +311,8 @@
   $('btn-hls').addEventListener('click', () => selectFormat('hls'));
   $('btn-dash').addEventListener('click', () => selectFormat('dash'));
   $('btn-live').addEventListener('click', goLive);
+  document.querySelectorAll('button.ch').forEach((b) =>
+    b.addEventListener('click', () => selectChannel(b)));
 
   setInterval(updateStats, 1000);
   start();

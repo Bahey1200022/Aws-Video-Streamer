@@ -117,7 +117,31 @@
         update_cache: true
         cache_valid_time: 3600
 
-    - name: Configure WireGuard tunnel (listens for the streamer)
+    # Phone camera: its key pair is made on the control machine (this
+    # laptop), because the private key must end up on the phone (in the QR
+    # code), never on a server
+    - name: Phone camera key (control machine)
+      when: phone_camera | default(false) | bool
+      delegate_to: localhost
+      become: false
+      block:
+        - name: Create the phone folder (owner only, git-ignored)
+          ansible.builtin.file:
+            path: "{{ phone_dir }}"
+            state: directory
+            mode: "0700"
+
+        - name: Generate the phone's private key (kept if it already exists)
+          ansible.builtin.shell: umask 077 && wg genkey > {{ phone_dir }}/private.key
+          args:
+            creates: "{{ phone_dir }}/private.key"
+
+        - name: Derive the phone's public key
+          ansible.builtin.shell: wg pubkey < {{ phone_dir }}/private.key
+          register: phone_wg_pub
+          changed_when: false
+
+    - name: Configure WireGuard tunnel (listens for the streamer and the phone)
       ansible.builtin.template:
         src: wg0.conf.j2
         dest: /etc/wireguard/wg0.conf
@@ -127,10 +151,18 @@
       vars:
         wg_address: "{{ wg_frontend_ip }}"
         wg_listen: true
-        wg_peers:
-          - name: Video Streamer
-            public_key: "{{ hostvars['video-streamer'].wg_public_key }}"
-            ip: "{{ wg_streamer_ip }}"
+        streamer_peer:
+          name: Video Streamer
+          public_key: "{{ hostvars['video-streamer'].wg_public_key }}"
+          ip: "{{ wg_streamer_ip }}"
+        # The phone is on the internet: inside the tunnel it may only reach
+        # the RTMP port
+        phone_peer:
+          name: Phone camera
+          public_key: "{{ phone_wg_pub.stdout | default('') }}"
+          ip: "{{ wg_phone_ip }}"
+          only_tcp_port: 1935
+        wg_peers: "{{ [streamer_peer] + ([phone_peer] if phone_camera | default(false) | bool else []) }}"
       notify: Restart WireGuard
 
     - name: Start WireGuard tunnel
@@ -138,6 +170,36 @@
         name: wg-quick@wg0
         state: started
         enabled: true
+
+    - name: Phone camera config and QR code (control machine)
+      when: phone_camera | default(false) | bool
+      delegate_to: localhost
+      become: false
+      block:
+        - name: Write the phone's tunnel settings (everything but its key)
+          ansible.builtin.template:
+            src: phone-wg.conf.j2
+            dest: "{{ phone_dir }}/settings.part"
+            mode: "0600"
+
+        # The key is read by the shell here, so it never becomes an Ansible
+        # variable (it can't show up in Ansible's or Terraform's output).
+        # The QR code leaves out the comments to stay small and easy to scan
+        - name: Build mss-phone.conf and its QR code mss-phone.png
+          ansible.builtin.shell: |
+            set -e
+            umask 077
+            cd {{ phone_dir }}
+            { echo "[Interface]"; echo "PrivateKey = $(cat private.key)"; cat settings.part; } > mss-phone.conf.new
+            if [ -f mss-phone.png ] && cmp -s mss-phone.conf.new mss-phone.conf; then
+              rm mss-phone.conf.new
+            else
+              mv mss-phone.conf.new mss-phone.conf
+              grep -v '^#' mss-phone.conf | qrencode -t png -o mss-phone.png
+              echo written
+            fi
+          register: phone_conf
+          changed_when: "'written' in phone_conf.stdout"
 
     - name: Create stream root folders for HLS and DASH chunks
       ansible.builtin.file:
@@ -250,8 +312,21 @@
         dest: /var/www/html/index.html
         mode: "0644"
       vars:
-        page_channel: stream
-        page_title: "{{ video_title }}"
+        # Channels on the page: the video loop, and the phone when enabled
+        loop_channel:
+          name: stream
+          label: Video loop
+          title: "{{ video_title }}"
+          source: ffmpeg on the Video Streamer
+        phone_channel:
+          name: phone
+          label: Phone camera
+          title: Phone camera
+          source: Phone camera (any network)
+          # Seconds the player stays behind live: a phone's upload comes in
+          # bursts, so it needs a bigger cushion than the steady video loop
+          buffer: 10
+        page_channels: "{{ [loop_channel] + ([phone_channel] if phone_camera | default(false) | bool else []) }}"
 
     # The frontend used to be a NAT router for the streamer (nat.sh boot
     # script). The streamer now has no internet route: undo the NAT

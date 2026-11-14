@@ -7,6 +7,15 @@ ListenPort = {{ wg_port }}
 # The private key never leaves this host: it is generated here and loaded
 # from disk, so it is not part of this file or of any Ansible variable
 PostUp = wg set %i private-key /etc/wireguard/private.key
+{% for peer in wg_peers if peer.only_tcp_port | default('') %}
+# {{ peer.name }}: may only reach TCP port {{ peer.only_tcp_port }} on this
+# host. Everything else it sends into the tunnel (SSH, the proxy, the
+# monitoring ports...) is dropped
+PostUp = iptables -I INPUT -i %i -s {{ peer.ip }} -j DROP
+PostUp = iptables -I INPUT -i %i -s {{ peer.ip }} -p tcp --dport {{ peer.only_tcp_port }} -j ACCEPT
+PostDown = iptables -D INPUT -i %i -s {{ peer.ip }} -p tcp --dport {{ peer.only_tcp_port }} -j ACCEPT
+PostDown = iptables -D INPUT -i %i -s {{ peer.ip }} -j DROP
+{% endfor %}
 {% for peer in wg_peers %}
 
 # {{ peer.name }}

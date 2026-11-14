@@ -232,7 +232,7 @@ GET http://127.0.0.1:8081/auth/publish?app=live&name=stream&key=<what ffmpeg sen
 ```nginx
 hls on;
 hls_path /var/www/html/stream/hls;     # where HLS files are written
-hls_fragment 3;                        # 3-second chunks (low delay)
+hls_fragment 2;                        # 2-second chunks (low delay)
 hls_playlist_length 60;                # the playlist covers the last 60 seconds
 
 dash on;
@@ -461,6 +461,7 @@ ExecStart=/usr/bin/ffmpeg -nostdin -loglevel warning \
   -re \
   -i {{ video_dir }}/{{ video_file }} \
   -c:v libx264 -preset veryfast \
+  -force_key_frames expr:gte(t,n_forced*2) \
   -c:a aac \
   -f flv \
   -rtmp_app live \
@@ -504,6 +505,7 @@ WantedBy=multi-user.target
 | `-re` | Read the file at **real-time speed**. Without it, ffmpeg would send the whole film in seconds. |
 | `-i /videos/<file>` | The input: the video Ansible uploaded |
 | `-c:v libx264 -preset veryfast` | Re-encode the video as **H.264** (what HLS/DASH players expect). `veryfast` uses little CPU, which suits a small t3 instance. |
+| `-force_key_frames expr:gte(t,n_forced*2)` | A **keyframe every 2 s**. nginx can only cut an HLS chunk at a keyframe, so this keeps chunks at 2 s and the delay low. |
 | `-c:a aac` | Encode the sound as **AAC** |
 | `-f flv` | Package it as **FLV**, the format RTMP carries |
 | `-rtmp_app live -rtmp_playpath stream?key=${STREAM_KEY}` `rtmp://10.99.0.1:1935` | Send it to the frontend's **tunnel address** (so it travels encrypted), to the `live` application, as the stream named `stream`, with the key. systemd fills in `${STREAM_KEY}` from the env file. nginx-rtmp receives exactly what it did when the key was in the URL. |
@@ -593,7 +595,7 @@ Before accepting a stream, nginx-rtmp asks a small server on `127.0.0.1:8081`. A
 Two layers. The network: only `127.0.0.1` and the tunnel address `10.99.0.2` may publish, and that address is only reachable through WireGuard. And identity: the stream key.
 
 **What's the difference between HLS and DASH?**
-Both cut the video into small files plus a playlist that the player keeps re-reading. HLS is Apple's format (`.m3u8`, 3 s chunks here); DASH is the open MPEG standard (`.mpd`, 15 s chunks here).
+Both cut the video into small files plus a playlist that the player keeps re-reading. HLS is Apple's format (`.m3u8`, 2 s chunks here); DASH is the open MPEG standard (`.mpd`, 15 s chunks here).
 
 **Why does ffmpeg use `-re` and `-stream_loop -1`?**
 `-re` sends the video at real speed, like a live camera. `-stream_loop -1` restarts it endlessly, so the stream never ends.

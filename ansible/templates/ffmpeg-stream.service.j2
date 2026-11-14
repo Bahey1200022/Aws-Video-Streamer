@@ -13,6 +13,7 @@ ExecStart=/usr/bin/ffmpeg -nostdin -loglevel warning \
   -re \
   -i {{ video_dir }}/{{ video_file }} \
   -c:v libx264 -preset veryfast \
+  -force_key_frames expr:gte(t,n_forced*2) \
   -c:a aac \
   -f flv \
   -rtmp_app live \

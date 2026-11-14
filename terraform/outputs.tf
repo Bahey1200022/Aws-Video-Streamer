@@ -19,6 +19,11 @@ output "stream_key" {
   sensitive = true
 }
 
+output "phone_stream_key" {
+  value     = var.enable_phone_camera ? random_password.phone_stream_key.result : null
+  sensitive = true
+}
+
 output "stream_url" {
   value = "${var.enable_tls && local.dns_enabled ? "https" : "http"}://${try(aws_route53_record.frontend[0].fqdn, local.frontend_public_ip)}/"
 }

@@ -14,6 +14,7 @@ See also: [HOW-IT-WORKS.md](HOW-IT-WORKS.md) · [README](../README.md)
 | **SSH key (`mss-key.pem`)** | Admin and Ansible login to the servers | ❌ | Private half: control machine + `terraform.tfstate`. Public half: the servers. |
 | **Stream key** | Authorizes publishing the live stream | ❌ | `terraform.tfstate`, `ansible/inventory.yml`, root-only files on both servers |
 | **WireGuard keys** | Encrypt and authenticate the backend → frontend tunnel | ❌ | Each server's `/etc/wireguard/private.key` (root-only) |
+| **Phone camera keys** | The phone's own stream key and WireGuard key ([PHONE-CAMERA.md](PHONE-CAMERA.md)) | ❌ | Stream key: `terraform.tfstate`, `ansible/inventory.yml`, nginx config. WireGuard key: `ansible/phone/` on the control machine (owner-only, git-ignored) and the phone |
 | **HTTPS private key** | Encrypts viewers' connections (TLS) | ❌ | Frontend, `/etc/letsencrypt/` (root-only) |
 | **Let's Encrypt account key** | certbot's identity for issuing and renewing certificates | ❌ | Frontend, `/etc/letsencrypt/accounts/` (root-only) |
 
