@@ -2,3 +2,4 @@ inventory.yml
 *.retry
 files/
 .grafana-tunnel.sock
+phone/
