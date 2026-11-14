@@ -187,7 +187,7 @@
         # The QR code leaves out the comments to stay small and easy to scan
         - name: Build mss-phone.conf and its QR code mss-phone.png
           ansible.builtin.shell: |
-            set -e
+            set -e -o pipefail
             umask 077
             cd {{ phone_dir }}
             { echo "[Interface]"; echo "PrivateKey = $(cat private.key)"; cat settings.part; } > mss-phone.conf.new
@@ -198,6 +198,8 @@
               grep -v '^#' mss-phone.conf | qrencode -t png -o mss-phone.png
               echo written
             fi
+          args:
+            executable: /bin/bash
           register: phone_conf
           changed_when: "'written' in phone_conf.stdout"
 
