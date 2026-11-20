@@ -82,6 +82,12 @@ variable "enable_monitoring" {
   default     = true
 }
 
+variable "enable_webrtc" {
+  description = "Real-time phone camera: MediaMTX on the frontend receives WebRTC (WHIP) and serves it to browsers (WHEP). Opens UDP 8189 on the frontend to the internet"
+  type        = bool
+  default     = true
+}
+
 variable "monitoring_instance_type" {
   description = "Instance type of the monitoring server (Prometheus + Loki + Grafana need about 1 GB of RAM)"
   type        = string

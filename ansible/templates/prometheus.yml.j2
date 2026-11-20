@@ -27,6 +27,14 @@ scrape_configs:
       - targets: ["127.0.0.1:9115"]
         labels: { server: monitoring }
 
+{% if enable_webrtc | default(false) | bool %}
+  # MediaMTX (real-time phone camera): publisher, viewers, bytes, lost packets
+  - job_name: mediamtx
+    static_configs:
+      - targets: ["{{ frontend_private_ip }}:9998"]
+        labels: { server: web-frontend }
+
+{% endif %}
   # The website as a viewer sees it: blackbox_exporter fetches the pages over
   # the private network, with the real host name (TLS is checked against it)
   - job_name: website

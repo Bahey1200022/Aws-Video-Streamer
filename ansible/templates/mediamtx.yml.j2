@@ -1,0 +1,77 @@
+# {{ ansible_managed }}
+# MediaMTX: the WebRTC media server for the real-time phone camera.
+# The phone publishes with WHIP, browsers watch with WHEP; both handshakes
+# reach it through nginx (HTTPS), the media itself on UDP {{ webrtc_udp_port }}.
+# Everything else MediaMTX can do is turned off. See docs/WEBRTC.md.
+
+logLevel: info
+# To the journal (systemd), where Alloy picks it up for Loki
+logDestinations: [stdout]
+
+# ---- Who may do what ----
+authMethod: internal
+authInternalUsers:
+  # The phone: the only one allowed to publish, and only on "phone". Only the
+  # password's SHA-256 is stored here; the password stays with Terraform and
+  # the phone (terraform output -raw webrtc_password)
+  - user: phone
+    pass: "sha256:{{ webrtc_password_hash }}"
+    ips: []
+    permissions:
+      - action: publish
+        path: phone
+  # Anyone may watch "phone" (it's on the public website)
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: read
+        path: phone
+{% if monitoring_private_ip is defined %}
+  # Prometheus on the monitoring server reads the metrics
+  - user: any
+    pass:
+    ips: ["{{ monitoring_private_ip }}"]
+    permissions:
+      - action: metrics
+{% endif %}
+
+# ---- Turned off: only WebRTC is used ----
+# (MediaMTX's RTMP would also take port 1935, which belongs to nginx-rtmp)
+api: false
+pprof: false
+playback: false
+rtsp: false
+rtmp: false
+hls: false
+srt: false
+moq: false
+
+# ---- Metrics, on the private address only ----
+metrics: {{ 'true' if monitoring_private_ip is defined else 'false' }}
+metricsAddress: {{ frontend_private_ip }}:9998
+
+# ---- WebRTC ----
+webrtc: true
+# Handshakes (WHIP/WHEP): localhost only, nginx forwards them over HTTPS
+webrtcAddress: 127.0.0.1:8889
+# nginx passes the real client address in X-Forwarded-For (for the logs)
+webrtcTrustedProxies: ["127.0.0.1"]
+# The page is on the same site; no other site may use this server
+webrtcAllowOrigins: ["{{ site_scheme }}://{{ fqdn if fqdn != '_' else ansible_host }}"]
+# The media: encrypted (DTLS-SRTP), on this UDP port
+webrtcLocalUDPAddress: :{{ webrtc_udp_port }}
+webrtcLocalTCPAddress: ""
+# Phones and browsers are on the internet: announce the PUBLIC address only.
+# The server's own interfaces only know its private VPC address. The public
+# IP changes when the frontend is stopped and started; every deployment
+# writes the current one here
+webrtcIPsFromInterfaces: false
+webrtcAdditionalHosts: ["{{ ansible_host }}"]
+
+# ---- The one stream ----
+paths:
+  phone:
+    source: publisher
+    # A phone that reconnects after a network drop replaces its old session
+    overridePublisher: true

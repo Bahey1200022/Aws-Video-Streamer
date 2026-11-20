@@ -543,7 +543,7 @@ ansible-playbook site.yml --tags grafana
 ```
 It closes the old tunnel and opens a new one to the current IP. After the nightly restart, run `terraform apply` first, so the inventory has the frontend's new IP.
 
-**How the play works** (play 10, `hosts: localhost`):
+**How the play works** (play 11, `hosts: localhost`):
 - closes the previous tunnel through its control socket (`ansible/.grafana-tunnel.sock`, git-ignored);
 - opens a new one with `ssh -f -N -M -S <socket> … -L 127.0.0.1:3000:localhost:3000`: `-f` puts it in the background once connected, `-M -S` creates the socket the next run uses to close it, and the ProxyCommand hops through the frontend;
 - checks that Grafana answers, and prints the address. If port 3000 is already taken, it says so but doesn't fail the deployment.

@@ -44,6 +44,14 @@ resource "aws_security_group" "monitoring" {
   }
 
   egress {
+    description = "Prometheus scrapes MediaMTX metrics on the frontend"
+    from_port   = 9998
+    to_port     = 9998
+    protocol    = "tcp"
+    cidr_blocks = [data.aws_subnet.public.cidr_block]
+  }
+
+  egress {
     description = "Blackbox probes of the website (HTTPS, over the private network)"
     from_port   = 443
     to_port     = 443

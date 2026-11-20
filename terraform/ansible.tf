@@ -23,6 +23,10 @@ resource "local_file" "inventory" {
     letsencrypt_staging = var.letsencrypt_staging
     acme_challenge      = var.acme_challenge
     stream_key          = random_password.stream_key.result
+    enable_webrtc       = var.enable_webrtc
+    # Only the hash goes to the server (MediaMTX's "sha256:" format, base64 of
+    # the binary digest): the password itself stays in Terraform and the phone
+    webrtc_password_hash = base64sha256(random_password.webrtc_publish.result)
     # Monitoring server (null when enable_monitoring = false)
     monitoring_private_ip  = try(aws_instance.monitoring[0].private_ip, null)
     grafana_admin_password = local.grafana_admin_password

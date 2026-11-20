@@ -7,7 +7,7 @@ This guide explains [`ansible/site.yml`](../ansible/site.yml): the playbook that
 - [How the playbook is started](#how-the-playbook-is-started)
 - [Ansible vocabulary](#ansible-vocabulary)
 - [Settings used by every play](#settings-used-by-every-play)
-- [Overview: the 9 plays](#overview-the-9-plays)
+- [Overview: the 11 plays](#overview-the-11-plays)
 - [Play 1: package proxy on the frontend](#play-1-package-proxy-on-the-frontend)
 - [Play 2: point the streamer's apt at the proxy](#play-2-point-the-streamers-apt-at-the-proxy)
 - [Play 3: WireGuard keys on both servers](#play-3-wireguard-keys-on-both-servers)
@@ -83,19 +83,21 @@ The streamer has no public IP, so the inventory gives it a `ProxyCommand`. SSH h
 
 ---
 
-## Overview: the 9 plays
+## Overview: the 11 plays
 
 | Play | Runs on | Purpose | Lines |
 |---|---|---|---|
 | 1 | Frontend | Start the **package proxy** (apt-cacher-ng) | [4-42](../ansible/site.yml#L4-L42) |
 | 2 | Streamer, monitoring | Tell the private servers' apt to **use that proxy**, then refresh the package lists | [44-74](../ansible/site.yml#L44-L74) |
 | 3 | Frontend, streamer | Install WireGuard, create each server's keys, share the public keys | [76-107](../ansible/site.yml#L76-L107) |
-| 4 | Frontend | nginx + RTMP, HTTPS certificate, website, tunnel (listening end) | [109-392](../ansible/site.yml#L109-L392) |
-| 5 | Streamer | Video, tunnel (calling end), ffmpeg loop service, removal of keys leaked into old logs | [394-530](../ansible/site.yml#L394-L530) |
-| 6 | All 3 | Turn on daily security updates, apply pending ones now, reboot if needed | [532-577](../ansible/site.yml#L532-L577) |
-| 7 | All 3 | **Metrics agents:** node_exporter; the stream-health collector on the frontend | [579-698](../ansible/site.yml#L579-L698) |
-| 8 | Monitoring | **Monitoring server:** Prometheus, blackbox_exporter, Loki, Grafana | [700-964](../ansible/site.yml#L700-L964) |
-| 9 | All 3 | **Log agents:** Alloy pushes each server's logs to Loki | [966-1071](../ansible/site.yml#L966-L1071) |
+| 4 | Frontend | nginx + RTMP, HTTPS certificate, website, tunnel (listening end) | [109-415](../ansible/site.yml#L109-L415) |
+| 5 | Streamer | Video, tunnel (calling end), ffmpeg loop service, removal of keys leaked into old logs | [417-548](../ansible/site.yml#L417-L548) |
+| 6 | All 3 | Turn on daily security updates, apply pending ones now, reboot if needed | [555-595](../ansible/site.yml#L555-L595) |
+| 7 | All 3 | **Metrics agents:** node_exporter; the stream-health collector on the frontend | [602-716](../ansible/site.yml#L602-L716) |
+| 8 | Monitoring | **Monitoring server:** Prometheus, blackbox_exporter, Loki, Grafana | [723-983](../ansible/site.yml#L723-L983) |
+| 9 | All 3 | **Log agents:** Alloy pushes each server's logs to Loki | [989-1094](../ansible/site.yml#L989-L1094) |
+| 10 | Frontend | **Real-time phone camera:** MediaMTX (WebRTC), when `enable_webrtc` is on ([WEBRTC.md](WEBRTC.md)) | [1105-1234](../ansible/site.yml#L1105-L1234) |
+| 11 | This machine | Open the **Grafana tunnel** on `localhost:3000` ([MONITORING.md](MONITORING.md)) | [1236-1290](../ansible/site.yml#L1236-L1290) |
 
 Plays 7 to 9 (monitoring) are explained in [MONITORING.md](MONITORING.md). This guide details plays 1 to 6.
 

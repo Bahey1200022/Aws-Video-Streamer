@@ -11,6 +11,10 @@ all:
     letsencrypt_staging: ${letsencrypt_staging}
     acme_challenge: ${acme_challenge}
     stream_key: ${stream_key}
+    enable_webrtc: ${enable_webrtc}
+%{ if enable_webrtc ~}
+    webrtc_password_hash: ${webrtc_password_hash}
+%{ endif ~}
 %{ if monitoring_private_ip != null ~}
     monitoring_private_ip: ${monitoring_private_ip}
     grafana_admin_password: ${grafana_admin_password}

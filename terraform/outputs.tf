@@ -23,6 +23,16 @@ output "stream_url" {
   value = "${var.enable_tls && local.dns_enabled ? "https" : "http"}://${try(aws_route53_record.frontend[0].fqdn, local.frontend_public_ip)}/"
 }
 
+# The phone app's WHIP address (user "phone"; password below)
+output "webrtc_whip_url" {
+  value = var.enable_webrtc ? "https://${try(aws_route53_record.frontend[0].fqdn, local.frontend_public_ip)}/phone/whip" : null
+}
+
+output "webrtc_password" {
+  value     = var.enable_webrtc ? random_password.webrtc_publish.result : null
+  sensitive = true
+}
+
 output "monitoring_private_ip" {
   value = try(aws_instance.monitoring[0].private_ip, null)
 }

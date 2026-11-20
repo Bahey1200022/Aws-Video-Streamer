@@ -46,6 +46,20 @@ resource "aws_security_group" "frontend" {
     cidr_blocks = [local.admin_cidr]
   }
 
+  # WebRTC media (enable_webrtc): phones and viewers are anywhere, so this
+  # is open to the internet. Only encrypted media flows here (DTLS-SRTP), and
+  # only after a handshake over HTTPS (443) that nginx forwards to MediaMTX
+  dynamic "ingress" {
+    for_each = var.enable_webrtc ? [1] : []
+    content {
+      description = "WebRTC media (MediaMTX): phone camera and real-time viewers"
+      from_port   = 8189
+      to_port     = 8189
+      protocol    = "udp"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  }
+
   # Monitoring (only when enable_monitoring = true): Prometheus scrapes
   # node_exporter here; Alloy pushes this server's logs to Loki
   dynamic "ingress" {
@@ -54,6 +68,18 @@ resource "aws_security_group" "frontend" {
       description     = "node_exporter scraped by Prometheus (monitoring server)"
       from_port       = 9100
       to_port         = 9100
+      protocol        = "tcp"
+      security_groups = [ingress.value]
+    }
+  }
+
+  # MediaMTX's metrics (WebRTC sessions, bytes), scraped by Prometheus
+  dynamic "ingress" {
+    for_each = var.enable_webrtc ? local.monitoring_sg_ids : []
+    content {
+      description     = "MediaMTX metrics scraped by Prometheus (monitoring server)"
+      from_port       = 9998
+      to_port         = 9998
       protocol        = "tcp"
       security_groups = [ingress.value]
     }

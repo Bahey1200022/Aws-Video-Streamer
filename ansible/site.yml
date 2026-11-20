@@ -250,8 +250,31 @@
         dest: /var/www/html/index.html
         mode: "0644"
       vars:
-        page_channel: stream
-        page_title: "{{ video_title }}"
+        # Channels on the page. kind: hls (chunks, a few seconds behind) or
+        # webrtc (real time, through MediaMTX)
+        loop_channel:
+          name: stream
+          kind: hls
+          label: Video loop
+          title: "{{ video_title }}"
+          pipeline:
+            - ffmpeg on the Video Streamer
+            - "RTMP + stream key|WireGuard 🔒"
+            - nginx-rtmp on the Web Frontend
+            - HLS (3 s) · DASH (15 s) chunks
+            - Your browser
+        phone_channel:
+          name: phone
+          kind: webrtc
+          label: Phone · real time
+          title: Phone camera
+          pipeline:
+            - Phone camera (Larix, any network)
+            - "WebRTC (WHIP) + password|DTLS-SRTP 🔒"
+            - MediaMTX on the Web Frontend
+            - "WebRTC (WHEP): frame by frame, no chunks|DTLS-SRTP 🔒"
+            - Your browser
+        page_channels: "{{ [loop_channel] + ([phone_channel] if enable_webrtc | default(false) | bool else []) }}"
 
     # The frontend used to be a NAT router for the streamer (nat.sh boot
     # script). The streamer now has no internet route: undo the NAT
@@ -1075,6 +1098,141 @@
 # in the background; an old one is closed first, because the frontend gets a
 # new public IP after each nightly restart. To reopen it without a full
 # deployment: ansible-playbook site.yml --tags grafana
+# Real-time phone camera (enable_webrtc in Terraform). MediaMTX receives
+# the phone's WebRTC stream (WHIP) and sends it to browsers (WHEP) with less
+# than a second of delay. nginx forwards the handshakes over HTTPS; the media
+# uses UDP 8189. See docs/WEBRTC.md.
+- name: Real-time phone camera (MediaMTX, WebRTC)
+  hosts: frontend
+  become: true
+  gather_facts: false
+  vars:
+    mediamtx_dir: /opt/mediamtx/{{ mediamtx_version }}
+  tasks:
+    - name: MediaMTX
+      when: enable_webrtc | default(false) | bool
+      block:
+        - name: Create the MediaMTX folders
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: "0755"
+          loop:
+            - "{{ mediamtx_dir }}"
+            - /etc/mediamtx
+
+        # The frontend has internet access: it downloads the release itself,
+        # and Ansible refuses it if the checksum doesn't match
+        - name: Download MediaMTX (checksum verified)
+          ansible.builtin.get_url:
+            url: "{{ mediamtx_url }}"
+            dest: "{{ mediamtx_dir }}/mediamtx.tar.gz"
+            checksum: "sha256:{{ mediamtx_sha256 }}"
+            mode: "0644"
+
+        - name: Unpack the MediaMTX program
+          ansible.builtin.unarchive:
+            src: "{{ mediamtx_dir }}/mediamtx.tar.gz"
+            dest: "{{ mediamtx_dir }}"
+            remote_src: true
+            include: [mediamtx]
+            creates: "{{ mediamtx_dir }}/mediamtx"
+          notify: Restart MediaMTX
+
+        # Holds only the publish password's hash, so it can be world-readable
+        - name: MediaMTX settings
+          ansible.builtin.template:
+            src: mediamtx.yml.j2
+            dest: /etc/mediamtx/mediamtx.yml
+            mode: "0644"
+          notify: Restart MediaMTX
+
+        - name: MediaMTX service (sandboxed)
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/mediamtx.service
+            content: |
+              # Installed by Ansible
+              [Unit]
+              Description=MediaMTX (WebRTC media server for the real-time phone camera)
+              After=network-online.target
+              Wants=network-online.target
+
+              [Service]
+              ExecStart={{ mediamtx_dir }}/mediamtx /etc/mediamtx/mediamtx.yml
+              Restart=always
+              RestartSec=5
+
+              # --- Sandbox: a throwaway user, nothing writable ---
+              # (it receives video from the internet, so it gets nothing else)
+              DynamicUser=yes
+              NoNewPrivileges=yes
+              CapabilityBoundingSet=
+              AmbientCapabilities=
+              ProtectSystem=strict
+              ProtectHome=yes
+              PrivateTmp=yes
+              PrivateDevices=yes
+              UMask=0077
+              ProtectKernelTunables=yes
+              ProtectKernelModules=yes
+              ProtectKernelLogs=yes
+              ProtectControlGroups=yes
+              ProtectClock=yes
+              ProtectHostname=yes
+              ProtectProc=invisible
+              ProcSubset=pid
+              RestrictNamespaces=yes
+              RestrictRealtime=yes
+              RestrictSUIDSGID=yes
+              LockPersonality=yes
+              MemoryDenyWriteExecute=yes
+              RemoveIPC=yes
+              # AF_NETLINK: the WebRTC library lists the network interfaces
+              RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+              SystemCallArchitectures=native
+              SystemCallFilter=@system-service
+              SystemCallFilter=~@privileged @resources
+              # The frontend is small: cap MediaMTX's memory
+              MemoryMax=300M
+              Environment=GOMEMLIMIT=220MiB
+
+              [Install]
+              WantedBy=multi-user.target
+            mode: "0644"
+          notify: Restart MediaMTX
+
+        - name: Start MediaMTX
+          ansible.builtin.systemd:
+            name: mediamtx
+            state: started
+            enabled: true
+            daemon_reload: true
+
+        - name: Apply new MediaMTX settings now
+          ansible.builtin.meta: flush_handlers
+
+        - name: Wait for MediaMTX's handshake port
+          ansible.builtin.wait_for:
+            host: 127.0.0.1
+            port: 8889
+            timeout: 30
+
+    # enable_webrtc turned off: stop it (the firewall closes UDP 8189)
+    - name: Stop MediaMTX when the real-time camera is off
+      ansible.builtin.systemd:
+        name: mediamtx
+        state: stopped
+        enabled: false
+      when: not (enable_webrtc | default(false) | bool)
+      failed_when: false
+
+  handlers:
+    - name: Restart MediaMTX
+      ansible.builtin.systemd:
+        name: mediamtx
+        state: restarted
+        daemon_reload: true
+
 - name: Open Grafana on this machine (http://localhost:3000)
   hosts: localhost
   connection: local

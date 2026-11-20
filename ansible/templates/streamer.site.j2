@@ -45,6 +45,23 @@ server {
         return 404;
     }
 
+{% if enable_webrtc | default(false) | bool %}
+    # Real-time phone camera: the WebRTC handshakes (WHIP to publish, WHEP to
+    # watch) go to MediaMTX on localhost. Only these two addresses: not
+    # MediaMTX's own web pages. The video itself then flows over
+    # UDP {{ webrtc_udp_port }}, straight to MediaMTX
+    location ~ ^/phone/(whip|whep)(/|$) {
+        proxy_pass http://127.0.0.1:8889;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        # Replace, not append: a client can't fake its address in the logs
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # A handshake is a few KB of text (SDP)
+        client_max_body_size 64k;
+    }
+
+{% endif %}
     location /hls {
         add_header Access-Control-Allow-Origin *;
         root /var/www/html/stream;

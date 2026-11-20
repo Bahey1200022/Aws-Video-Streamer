@@ -11,7 +11,7 @@ to browsers.
 - **Terraform** builds the AWS infrastructure.
 - **Ansible**, launched by Terraform, configures the software on both servers.
 
-For a file-by-file explanation of how everything works, see [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md). Every key and secret is described in [docs/KEYS-AND-SECRETS.md](docs/KEYS-AND-SECRETS.md), the Ansible playbook play by play in [docs/PLAYBOOK.md](docs/PLAYBOOK.md), the configuration templates in [docs/TEMPLATES.md](docs/TEMPLATES.md), the fixes from a security self-audit in [docs/SECURITY-FIXES.md](docs/SECURITY-FIXES.md), how the monitoring works in [docs/MONITORING.md](docs/MONITORING.md), and its full plan in [docs/MONITORING-PLAN.md](docs/MONITORING-PLAN.md).
+For a file-by-file explanation of how everything works, see [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md). Every key and secret is described in [docs/KEYS-AND-SECRETS.md](docs/KEYS-AND-SECRETS.md), the Ansible playbook play by play in [docs/PLAYBOOK.md](docs/PLAYBOOK.md), the configuration templates in [docs/TEMPLATES.md](docs/TEMPLATES.md), the fixes from a security self-audit in [docs/SECURITY-FIXES.md](docs/SECURITY-FIXES.md), how the monitoring works in [docs/MONITORING.md](docs/MONITORING.md), its full plan in [docs/MONITORING-PLAN.md](docs/MONITORING-PLAN.md), and the real-time phone camera (WebRTC) in [docs/WEBRTC.md](docs/WEBRTC.md).
 
 ---
 
@@ -104,6 +104,7 @@ For a file-by-file explanation of how everything works, see [docs/HOW-IT-WORKS.m
 | Frontend | TCP 22 | **Your current public IP only** (auto-detected) |
 | Frontend | UDP 51820 | Private subnet only (WireGuard) |
 | Frontend | TCP 3142 | Private subnet only (package proxy for the streamer) |
+| Frontend | UDP 8189 | Anywhere, when `enable_webrtc` is on (WebRTC media of the real-time phone camera, encrypted) |
 | Streamer | TCP 22 | Frontend security group only (jump host) |
 
 **Outbound traffic is restricted too**, so a compromised process can't "phone home" on arbitrary ports:

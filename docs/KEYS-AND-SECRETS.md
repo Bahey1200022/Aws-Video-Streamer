@@ -14,6 +14,7 @@ See also: [HOW-IT-WORKS.md](HOW-IT-WORKS.md) · [README](../README.md)
 | **SSH key (`mss-key.pem`)** | Admin and Ansible login to the servers | ❌ | Private half: control machine + `terraform.tfstate`. Public half: the servers. |
 | **Stream key** | Authorizes publishing the live stream | ❌ | `terraform.tfstate`, `ansible/inventory.yml`, root-only files on both servers |
 | **WireGuard keys** | Encrypt and authenticate the backend → frontend tunnel | ❌ | Each server's `/etc/wireguard/private.key` (root-only) |
+| **WebRTC publish password** | Lets the phone publish on the real-time channel ([WEBRTC.md](WEBRTC.md)) | ❌ | `terraform.tfstate` and the phone app. The server and `inventory.yml` only hold its **SHA-256 hash** |
 | **HTTPS private key** | Encrypts viewers' connections (TLS) | ❌ | Frontend, `/etc/letsencrypt/` (root-only) |
 | **Let's Encrypt account key** | certbot's identity for issuing and renewing certificates | ❌ | Frontend, `/etc/letsencrypt/accounts/` (root-only) |
 

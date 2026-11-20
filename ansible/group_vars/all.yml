@@ -37,9 +37,19 @@ alloy_deb: alloy-1.21.3-1.amd64.deb
 alloy_url: https://github.com/grafana/alloy/releases/download/v1.21.3/alloy-1.21.3-1.amd64.deb
 alloy_sha256: dbbd705de8ab37dec0cbd6361a3fc7e754d6b2854b57ce672a83e6366199ba73
 
+# --- Real-time phone camera (docs/WEBRTC.md) ---
+# MediaMTX, the WebRTC media server on the frontend. Same version rule as
+# above. Checksum: GitHub's release digest, cross-checked with the release's
+# checksums.sha256 file
+mediamtx_version: "1.21.3"
+mediamtx_url: https://github.com/bluenviron/mediamtx/releases/download/v1.21.3/mediamtx_v1.21.3_linux_amd64.tar.gz
+mediamtx_sha256: 0a2ea7eba96023631efa1bea7804823a9145b043b6646a8a05798d4ac24ed635
+# UDP port of the WebRTC media (the handshakes go through nginx on 443)
+webrtc_udp_port: 8189
+
 # How long metrics and logs are kept
 monitoring_retention_days: 15
 
 # Services whose state node_exporter reports (systemd collector)
-monitored_units: "(nginx|wg-quick@wg0|apt-cacher-ng|ffmpeg-stream|prometheus|prometheus-node-exporter|prometheus-blackbox-exporter|grafana-server|loki|alloy|mss-stream-metrics)[.]service"
+monitored_units: "(nginx|wg-quick@wg0|apt-cacher-ng|ffmpeg-stream|prometheus|prometheus-node-exporter|prometheus-blackbox-exporter|grafana-server|loki|alloy|mss-stream-metrics|mediamtx)[.]service"
 site_scheme: "{{ 'https' if enable_tls | bool else 'http' }}"
