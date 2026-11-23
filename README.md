@@ -120,6 +120,8 @@ For a file-by-file explanation of how everything works, see [docs/HOW-IT-WORKS.m
 
 Amazon DNS, NTP and the metadata service aren't filtered by security groups. **Verified:** apt, DNS, NTP, the tunnel and the stream work, while outbound ports 25, 8080 and 6667 are blocked from both servers.
 
+**DNS is filtered separately** by a **Route 53 Resolver DNS Firewall** on the VPC ([dns_firewall.tf](terraform/dns_firewall.tf)). Without it, a compromised server could leak data inside DNS lookups (`<secret>.attacker.example`), the one path out that security groups can't close. Only the names the servers need resolve: Ubuntu, Let's Encrypt, GitHub, AWS endpoints, the VPC's own names and the site's domain. It starts in **`alert`** mode (everything resolves, other lookups are logged to CloudWatch, see `terraform output dns_firewall_log`); once the log only shows expected names, set `dns_firewall = "block"`.
+
 RTMP (1935) is **not reachable over the network** except through the WireGuard tunnel. The RTMP control endpoint (8080, no password) listens on **localhost only**. Before that fix it listened on every interface: the security groups blocked it, but traffic inside the tunnel isn't filtered by them (see [docs/SECURITY-FIXES.md](docs/SECURITY-FIXES.md)).
 
 ### 3. Authenticated publishing (stream key)
@@ -202,6 +204,7 @@ RTMP (1935) is **not reachable over the network** except through the WireGuard t
 | Leaked disk snapshot or copied volume | Disks encrypted with a customer-managed KMS key |
 | Secrets leaking through git or logs | Git-ignored state and keys; key-free log formats; root-only files; gitleaks in CI + pre-commit |
 | Malware calling out on arbitrary ports | Outbound security-group rules limited to 80/443 (+ SSH/WireGuard inside the VPC) |
+| Data smuggled out inside DNS lookups | DNS Firewall allowlist on the VPC (`alert`, then `block`) |
 | Insecure infrastructure changes slipping in | Checkov + Terraform validation on every push |
 
 ---
@@ -406,6 +409,7 @@ mss-project/
 │   ├── compute.tf                  SSH key, instances, auto-start, DNS record
 │   ├── stream_key.tf               Stream key generation
 │   ├── kms.tf                      Customer-managed KMS key for disk encryption
+│   ├── dns_firewall.tf             DNS allowlist on the VPC (alert or block), query log
 │   ├── ansible.tf                  Generates the inventory and runs the playbook
 │   ├── inventory.yml.tftpl         Inventory template
 │   └── outputs.tf                  IPs, URLs, SSH command, stream key (sensitive)

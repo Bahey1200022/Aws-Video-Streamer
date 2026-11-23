@@ -88,6 +88,22 @@ variable "enable_webrtc" {
   default     = true
 }
 
+variable "dns_firewall" {
+  description = <<-EOT
+    DNS Firewall on the VPC (see dns_firewall.tf): only allowlisted domain names resolve.
+    "alert" - everything still resolves, but lookups outside the allowlist are logged (start here)
+    "block" - lookups outside the allowlist get an empty answer
+    "off"   - no DNS filtering
+  EOT
+  type        = string
+  default     = "alert"
+
+  validation {
+    condition     = contains(["off", "alert", "block"], var.dns_firewall)
+    error_message = "dns_firewall must be \"off\", \"alert\" or \"block\"."
+  }
+}
+
 variable "monitoring_instance_type" {
   description = "Instance type of the monitoring server (Prometheus + Loki + Grafana need about 1 GB of RAM)"
   type        = string

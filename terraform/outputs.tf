@@ -48,3 +48,9 @@ output "grafana_admin_password" {
   value     = local.monitoring_enabled ? local.grafana_admin_password : null
   sensitive = true
 }
+
+# Lookups the DNS Firewall alerted on or blocked, in the last hour (needs the
+# AWS CLI with this account's credentials)
+output "dns_firewall_log" {
+  value = local.dns_firewall_on ? "aws logs tail /mss/dns-queries --region ${var.aws_region} --since 1h --format short --filter-pattern '{ $.firewall_rule_action = \"ALERT\" || $.firewall_rule_action = \"BLOCK\" }'" : null
+}
