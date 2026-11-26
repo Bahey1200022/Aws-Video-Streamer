@@ -2,7 +2,9 @@
 # {{ ansible_managed }}
 """Stream health metrics for Prometheus (node_exporter textfile collector).
 
-Run every 15 s by mss-stream-metrics.timer. Writes
+One value per channel (label channel="stream" for the video loop,
+channel="phone" for the phone camera). Run every 15 s by
+mss-stream-metrics.timer. Writes
 {{ textfile_dir }}/mss_stream.prom atomically, so node_exporter never reads a
 half-written file. Needs no open port: node_exporter publishes the file.
 """
@@ -14,55 +16,64 @@ import xml.etree.ElementTree as ET
 HLS_DIR = "/var/www/html/stream/hls"
 STAT_URL = "http://127.0.0.1:8080/stat"   # nginx-rtmp statistics, localhost only
 OUT = "{{ textfile_dir }}/mss_stream.prom"
+CHANNELS = {{ (['stream'] + (['phone'] if phone_camera | default(false) | bool else [])) | to_json }}
 
 
-def newest_chunk_age():
-    """Seconds since the newest HLS chunk was written (-1 if there is none)."""
+def newest_chunk_age(channel):
+    """Seconds since the channel's newest HLS chunk was written (-1 if none).
+
+    nginx-rtmp names the chunks <channel>-<number>.ts."""
     try:
-        times = [e.stat().st_mtime for e in os.scandir(HLS_DIR) if e.name.endswith(".ts")]
+        times = [e.stat().st_mtime for e in os.scandir(HLS_DIR)
+                 if e.name.startswith(channel + "-") and e.name.endswith(".ts")]
     except OSError:
         return -1
     return time.time() - max(times) if times else -1
 
 
 def rtmp_stats():
-    """Publisher state, incoming bitrate and RTMP clients of the 'stream' stream."""
-    stats = {"up": 0, "publishing": 0, "bw_in": 0, "clients": 0}
+    """nginx-rtmp's state, then the publisher, bitrate and clients per channel."""
+    stats = {c: {"publishing": 0, "bw_in": 0, "clients": 0} for c in CHANNELS}
     try:
         with urllib.request.urlopen(STAT_URL, timeout=3) as r:
             root = ET.fromstring(r.read())
-        stats["up"] = 1
     except Exception:
-        return stats
+        return 0, stats
     for stream in root.iter("stream"):
-        if stream.findtext("name") != "stream":
+        s = stats.get(stream.findtext("name"))
+        if s is None:
             continue
-        stats["publishing"] = 1 if stream.find("publishing") is not None else 0
-        stats["bw_in"] = int(stream.findtext("bw_in") or 0)
-        stats["clients"] = int(stream.findtext("nclients") or 0)
-    return stats
+        s["publishing"] = 1 if stream.find("publishing") is not None else 0
+        s["bw_in"] = int(stream.findtext("bw_in") or 0)
+        s["clients"] = int(stream.findtext("nclients") or 0)
+    return 1, stats
+
+
+def metric(lines, name, kind, help_text, values):
+    lines += [f"# HELP {name} {help_text}", f"# TYPE {name} {kind}"]
+    # (no f-string: its doubled braces would clash with this Jinja template)
+    lines += ['%s{channel="%s"} %s' % (name, c, v) for c, v in values.items()]
 
 
 def main():
-    age = newest_chunk_age()
-    s = rtmp_stats()
+    up, stats = rtmp_stats()
     lines = [
-        "# HELP mss_hls_newest_chunk_age_seconds Seconds since the newest HLS chunk was written (-1: none).",
-        "# TYPE mss_hls_newest_chunk_age_seconds gauge",
-        f"mss_hls_newest_chunk_age_seconds {age:.1f}",
         "# HELP mss_rtmp_stat_up 1 if nginx-rtmp's statistics page answered.",
         "# TYPE mss_rtmp_stat_up gauge",
-        f"mss_rtmp_stat_up {s['up']}",
-        "# HELP mss_rtmp_publishing 1 if a publisher is sending the stream.",
-        "# TYPE mss_rtmp_publishing gauge",
-        f"mss_rtmp_publishing {s['publishing']}",
-        "# HELP mss_rtmp_bandwidth_in_bits Incoming bitrate of the stream, bits per second.",
-        "# TYPE mss_rtmp_bandwidth_in_bits gauge",
-        f"mss_rtmp_bandwidth_in_bits {s['bw_in']}",
-        "# HELP mss_rtmp_clients RTMP clients connected to the stream (the publisher included).",
-        "# TYPE mss_rtmp_clients gauge",
-        f"mss_rtmp_clients {s['clients']}",
+        f"mss_rtmp_stat_up {up}",
     ]
+    metric(lines, "mss_hls_newest_chunk_age_seconds", "gauge",
+           "Seconds since the channel's newest HLS chunk was written (-1: none).",
+           {c: f"{newest_chunk_age(c):.1f}" for c in CHANNELS})
+    metric(lines, "mss_rtmp_publishing", "gauge",
+           "1 if a publisher is sending the channel.",
+           {c: s["publishing"] for c, s in stats.items()})
+    metric(lines, "mss_rtmp_bandwidth_in_bits", "gauge",
+           "Incoming bitrate of the channel, bits per second.",
+           {c: s["bw_in"] for c, s in stats.items()})
+    metric(lines, "mss_rtmp_clients", "gauge",
+           "RTMP clients connected to the channel (the publisher included).",
+           {c: s["clients"] for c, s in stats.items()})
     tmp = OUT + ".tmp"
     with open(tmp, "w") as f:
         f.write("\n".join(lines) + "\n")

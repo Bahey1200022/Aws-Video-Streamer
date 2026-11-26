@@ -22,10 +22,14 @@ http {
     default_type    application/octet-stream;
 
     # Publish authentication: nginx-rtmp asks this endpoint before accepting
-    # a stream. Only the stream "stream" with the right key is allowed.
+    # a stream. Each channel has its own key: "stream" (the video loop) and
+    # "phone" (the phone camera). A key only opens its own channel.
     map "$arg_name:$arg_key" $publish_allowed {
         default                     0;
         "stream:{{ stream_key }}"   1;
+{% if phone_camera | default(false) | bool %}
+        "phone:{{ phone_stream_key }}"    1;
+{% endif %}
     }
 
 
@@ -84,21 +88,33 @@ rtmp {
             live on;
             record off;
 
-            # Layer 1: network - only the streamer's WireGuard address (or
-            # localhost) may publish, so the stream can't arrive unencrypted
+            # A phone on 4G can vanish without closing its connection. Drop a
+            # publisher that has sent nothing for 10 s, so its reconnection
+            # isn't refused with "already publishing"
+            drop_idle_publisher 10s;
+
+            # Layer 1: network - only WireGuard addresses (the streamer, the
+            # phone) or localhost may publish, so a stream can't arrive
+            # unencrypted
             allow publish 127.0.0.1;
             allow publish {{ wg_streamer_ip }};
+{% if phone_camera | default(false) | bool %}
+            allow publish {{ wg_phone_ip }};
+{% endif %}
             deny publish all;
 
             # Layer 2: identity - the publisher must present the stream key
-            # (rtmp://host:1935/live/stream?key=...). GET puts the RTMP
+            # (rtmp://host:1935/live/<channel>?key=...). GET puts the RTMP
             # arguments in the query string so the http block can read them.
             notify_method get;
             on_publish http://127.0.0.1:8081/auth/publish;
 
             hls on;
             hls_path /var/www/html/stream/hls;
-            hls_fragment 3;
+            # 2 s chunks: lower delay. A chunk can only be cut at a keyframe,
+            # so the publishers send one every 2 s (ffmpeg: -force_key_frames;
+            # the phone: Larix's keyframe frequency, 1 s)
+            hls_fragment 2;
             hls_playlist_length 60;
 
             dash on;

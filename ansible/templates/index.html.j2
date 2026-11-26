@@ -103,7 +103,7 @@
 {% if page_channels | length > 1 %}
         <div class="seg" role="group" aria-label="Channel">
 {% for ch in page_channels %}
-          <button class="ch" data-channel="{{ ch.name }}" data-kind="{{ ch.kind }}" data-title="{{ ch.title | e }}"
+          <button class="ch" data-channel="{{ ch.name }}" data-kind="{{ ch.kind }}" data-title="{{ ch.title | e }}" data-buffer="{{ ch.buffer | default('') }}"
                   aria-pressed="{{ 'true' if loop.first else 'false' }}">{{ ch.label | e }}</button>
 {% endfor %}
         </div>
@@ -115,8 +115,8 @@
         <button id="btn-live" class="btn" title="Jump to the live edge">Go live</button>
         <span class="spacer"></span>
         <span class="links" id="hls-links">
-          <a href="/hls/{{ page_channels[0].name }}.m3u8">{{ page_channels[0].name }}.m3u8</a>
-          <a href="/dash/{{ page_channels[0].name }}.mpd">{{ page_channels[0].name }}.mpd</a>
+          <a id="link-hls" href="/hls/{{ page_channels[0].name }}.m3u8">{{ page_channels[0].name }}.m3u8</a>
+          <a id="link-dash" href="/dash/{{ page_channels[0].name }}.mpd">{{ page_channels[0].name }}.mpd</a>
         </span>
       </div>
     </main>
@@ -157,6 +157,7 @@
 (() => {
   let channel = window.MSS_CHANNEL;
   let kind = 'hls';                 // 'hls' (chunks) or 'webrtc' (real time)
+  let buffer = 0;                   // seconds behind live (HLS); 0 = the default (2 chunks)
   const source = (fmt) => fmt === 'hls' ? '/hls/' + channel + '.m3u8' : '/dash/' + channel + '.mpd';
   const DASHJS = {
     src: 'https://cdn.jsdelivr.net/npm/dashjs@4.7.4/dist/dash.all.min.js',
@@ -184,6 +185,8 @@
 
   function scheduleRetry(reason) {
     setBadge('off');
+    // The phone only streams when someone films: say so instead of an error
+    if (channel === 'phone') reason = 'The phone camera is not streaming right now.';
     showOverlay(reason + ' Retrying…');
     clearTimeout(retryTimer);
     retryTimer = setTimeout(start, RETRY_MS);
@@ -214,7 +217,14 @@
 
   function startHls() {
     if (window.Hls && Hls.isSupported()) {
-      hls = new Hls({ liveSyncDurationCount: 3, manifestLoadingMaxRetry: 2 });
+      // Steady channel: play 2 chunks (about 4 s) behind live, and jump
+      // forward if a stall leaves playback more than 5 chunks behind.
+      // Channel with a buffer (the phone): stay that many seconds behind.
+      // (hls.js refuses a mix of the two kinds of setting)
+      const live = buffer
+        ? { liveSyncDuration: buffer, liveMaxLatencyDuration: buffer * 2 }
+        : { liveSyncDurationCount: 2, liveMaxLatencyDurationCount: 5 };
+      hls = new Hls({ ...live, manifestLoadingMaxRetry: 2 });
       hls.on(Hls.Events.ERROR, (_, data) => {
         if (data.fatal) scheduleRetry('Stream unavailable.');
       });
@@ -286,12 +296,19 @@
     if (button.dataset.channel === channel) return;
     channel = button.dataset.channel;
     kind = button.dataset.kind;
+    buffer = Number(button.dataset.buffer) || 0;
     document.querySelectorAll('button.ch').forEach((b) =>
       b.setAttribute('aria-pressed', String(b === button)));
     document.querySelectorAll('.pipeline').forEach((ul) => { ul.hidden = ul.dataset.for !== channel; });
     $('ch-title').textContent = button.dataset.title;
     // HLS/DASH buttons and playlist links only mean something for HLS channels
     $('format-seg').hidden = $('hls-links').hidden = kind === 'webrtc';
+    if (kind === 'hls') {
+      $('link-hls').href = source('hls');
+      $('link-hls').textContent = channel + '.m3u8';
+      $('link-dash').href = source('dash');
+      $('link-dash').textContent = channel + '.mpd';
+    }
     start();
   }
 

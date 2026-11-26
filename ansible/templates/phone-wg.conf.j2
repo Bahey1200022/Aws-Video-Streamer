@@ -1,0 +1,19 @@
+# {{ ansible_managed }}
+# WireGuard settings for the phone camera, everything after its private key.
+# site.yml puts the key in front and writes mss-phone.conf + mss-phone.png
+# (the QR code to scan with the WireGuard app). See docs/PHONE-CAMERA.md.
+Address = {{ wg_phone_ip }}/32
+# Mobile networks often carry smaller packets than Wi-Fi: 1280 always fits
+MTU = 1280
+
+# MSS Web Frontend
+[Peer]
+PublicKey = {{ hostvars['web-frontend'].wg_public_key }}
+# A name rather than an IP when there is one: the frontend's public IP
+# changes when it is stopped and started (turn the tunnel off and on again)
+Endpoint = {{ fqdn if fqdn != '_' else hostvars['web-frontend'].ansible_host }}:{{ wg_port }}
+# Only the frontend's tunnel address goes through the tunnel; the rest of
+# the phone's traffic is untouched
+AllowedIPs = {{ wg_frontend_ip }}/32
+# Keeps the mobile network's NAT open while the phone is idle
+PersistentKeepalive = 25

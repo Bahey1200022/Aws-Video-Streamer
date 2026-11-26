@@ -45,6 +45,7 @@ ffmpeg loops the film                                       nginx-rtmp → HLS/D
 | `docs/TEMPLATES.md` | The 6 configuration templates explained file by file |
 | `docs/SECURITY-FIXES.md` | Three weaknesses found by a self-audit: problem, fix, before/after evidence |
 | `docs/WEBRTC.md` | The real-time phone camera: WebRTC explained from zero, MediaMTX, the design and its security |
+| `docs/PHONE-CAMERA.md` | Streaming from a phone: its WireGuard tunnel, QR code, key and the 4 locks |
 | `docs/MONITORING.md` | How the monitoring works: Prometheus, node_exporter, Loki, Alloy, Grafana; where every number and log line comes from |
 | `docs/MONITORING-PLAN.md` | The monitoring plan: metrics, dashboards and logs are built (M1 to M3); alerts are not yet |
 | `.pre-commit-config.yaml` | Runs **gitleaks** on the developer's machine **before every commit**, so a secret never even enters git |
@@ -167,7 +168,7 @@ Generated, and **never committed** (git-ignored):
 - **An RTMP server on port 1935** receives the stream.
 - **It only accepts** a publisher on the WireGuard address `10.99.0.2`, **with the stream key**.
 - The key is checked by an internal endpoint on `127.0.0.1:8081`, which logs every attempt **without the key**.
-- **It cuts the video** into HLS (3 s) and DASH (15 s) chunks.
+- **It cuts the video** into HLS (2 s) and DASH (15 s) chunks.
 - **It logs without the key**, and its control page listens on localhost only.
 
 **`streamer.site.j2`, the website:**

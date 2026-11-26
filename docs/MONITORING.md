@@ -91,7 +91,7 @@ $ curl http://192.168.0.148:9100/metrics
 node_cpu_seconds_total{cpu="0",mode="idle"} 8951.56
 node_memory_MemAvailable_bytes 5.69905152e+08
 node_systemd_unit_state{name="nginx.service",state="active"} 1
-mss_rtmp_publishing 1
+mss_rtmp_publishing{channel="stream"} 1
 ...                                    (about 1100 lines)
 ```
 

@@ -88,6 +88,12 @@ variable "enable_webrtc" {
   default     = true
 }
 
+variable "enable_phone_camera" {
+  description = "Let a phone publish an RTMP channel (\"phone\", HLS/DASH) through its own WireGuard tunnel. Opens UDP 51820 on the frontend to the internet"
+  type        = bool
+  default     = true
+}
+
 variable "dns_firewall" {
   description = <<-EOT
     DNS Firewall on the VPC (see dns_firewall.tf): only allowlisted domain names resolve.

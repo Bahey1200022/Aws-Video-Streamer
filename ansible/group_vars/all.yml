@@ -2,6 +2,10 @@
 wg_port: 51820
 wg_frontend_ip: 10.99.0.1
 wg_streamer_ip: 10.99.0.2
+# The phone camera (when phone_camera is true): its config and QR code are
+# written in ansible/phone/ on the control machine (git-ignored)
+wg_phone_ip: 10.99.0.3
+phone_dir: "{{ playbook_dir }}/phone"
 
 # Video looped by the Video Streamer (Blender open movie, CC BY).
 # download.blender.org returns 403 to AWS IPs, so it's fetched on the control

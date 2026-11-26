@@ -196,7 +196,7 @@ Acquire::http::Proxy "http://192.168.0.148:3142";
 | Task | What it does |
 |---|---|
 | Install packages | `nginx` (web server), `libnginx-mod-rtmp` (lets nginx **receive** a live RTMP stream), `ffmpeg` |
-| Configure WireGuard tunnel | Fills [`wg0.conf.j2`](../ansible/templates/wg0.conf.j2) → `/etc/wireguard/wg0.conf` (mode `0600`). The frontend's address is `10.99.0.1`, it **listens** on UDP 51820, and its only peer is the streamer (public key from play 3, allowed IP `10.99.0.2/32`). |
+| Configure WireGuard tunnel | Fills [`wg0.conf.j2`](../ansible/templates/wg0.conf.j2) → `/etc/wireguard/wg0.conf` (mode `0600`). The frontend's address is `10.99.0.1`, it **listens** on UDP 51820, and its peers are the streamer (public key from play 3, allowed IP `10.99.0.2/32`) and, when `phone_camera` is on, the phone (`10.99.0.3/32`, TCP 1935 only). The phone's key pair, config and QR code are made on the control machine in `ansible/phone/` ([PHONE-CAMERA.md](PHONE-CAMERA.md)). |
 | Start WireGuard tunnel | `wg-quick@wg0`, started now and at every boot |
 | Create stream folders | `/var/www/html/stream/hls` and `/dash`, owned by `www-data` (nginx's user), where the video chunks are written |
 
@@ -228,7 +228,7 @@ Install certbot
 
 | Task | What it does |
 |---|---|
-| Configure nginx (main config) | [`nginx.conf.j2`](../ansible/templates/nginx.conf.j2) → `/etc/nginx/nginx.conf`. It's the **RTMP receiver**: port 1935, accepts publishing only from `127.0.0.1` and the tunnel address `10.99.0.2`, checks the **stream key** through `on_publish`, and cuts HLS (3 s) and DASH chunks. Mode `0600` because it **contains the stream key**. |
+| Configure nginx (main config) | [`nginx.conf.j2`](../ansible/templates/nginx.conf.j2) → `/etc/nginx/nginx.conf`. It's the **RTMP receiver**: port 1935, accepts publishing only from `127.0.0.1` and the tunnel address `10.99.0.2`, checks the **stream key** through `on_publish`, and cuts HLS (2 s) and DASH chunks. Mode `0600` because it **contains the stream key**. |
 | Configure streamer site | [`streamer.site.j2`](../ansible/templates/streamer.site.j2) → `/etc/nginx/sites-available/streamer`. It's the **website**: HTTPS (TLS 1.2/1.3, HSTS), the HTTP→HTTPS redirect (except Let's Encrypt challenges), and serving `/hls` and `/dash`. |
 | Enable streamer site | Symlink into `sites-enabled/` |
 | Disable default site | Removes Ubuntu's default page, which would otherwise take port 80 |

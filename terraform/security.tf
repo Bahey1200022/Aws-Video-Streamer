@@ -28,6 +28,21 @@ resource "aws_security_group" "frontend" {
     cidr_blocks = [data.aws_subnet.private.cidr_block]
   }
 
+  # Phone camera (enable_phone_camera): the phone's address changes with the
+  # network (4G, Wi-Fi), so WireGuard is open to the internet. WireGuard
+  # never answers a packet that isn't signed with a known key, so to anyone
+  # else the port looks closed
+  dynamic "ingress" {
+    for_each = var.enable_phone_camera ? [1] : []
+    content {
+      description = "WireGuard tunnel from the phone camera (any network)"
+      from_port   = 51820
+      to_port     = 51820
+      protocol    = "udp"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  }
+
   # The streamer has no internet access: it gets Ubuntu packages and security
   # updates from the package proxy (apt-cacher-ng) running on the frontend
   ingress {

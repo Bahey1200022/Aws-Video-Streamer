@@ -17,7 +17,7 @@
   "panels": [
     {
       "type": "stat",
-      "title": "Stream",
+      "title": "Publishers",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -35,8 +35,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "mss_rtmp_publishing",
-          "legendFormat": "publisher"
+          "expr": "mss_rtmp_publishing{channel!=\"\"}",
+          "legendFormat": "{{channel}}"
         }
       ],
       "fieldConfig": {
@@ -73,7 +73,50 @@
             }
           ]
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "stream"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Video loop"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "phone"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Phone camera"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "OFF",
+                        "color": "blue"
+                      },
+                      "1": {
+                        "text": "LIVE",
+                        "color": "green"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "colorMode": "background",
@@ -87,12 +130,12 @@
           "values": false
         }
       },
-      "description": "1 when ffmpeg on the streamer is publishing to nginx-rtmp (from nginx-rtmp's statistics page).",
+      "description": "Video loop: 1 when ffmpeg on the streamer is publishing. Phone camera: 1 while the phone streams (OFF is normal when nobody films). From nginx-rtmp's statistics page.",
       "id": 1
     },
     {
       "type": "stat",
-      "title": "Newest HLS chunk age",
+      "title": "Newest HLS chunk age (video loop)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -110,7 +153,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "mss_hls_newest_chunk_age_seconds",
+          "expr": "mss_hls_newest_chunk_age_seconds{channel=\"stream\"}",
           "legendFormat": "age"
         }
       ],
@@ -315,8 +358,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "mss_hls_newest_chunk_age_seconds",
-          "legendFormat": "age"
+          "expr": "mss_hls_newest_chunk_age_seconds{channel=\"stream\"} or (mss_hls_newest_chunk_age_seconds{channel=\"phone\"} and on(channel) mss_rtmp_publishing{channel=\"phone\"} == 1)",
+          "legendFormat": "{{channel}}"
         }
       ],
       "fieldConfig": {
@@ -328,7 +371,32 @@
             "showPoints": "never"
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "stream"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Video loop"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "phone"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Phone camera"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -339,7 +407,7 @@
           "mode": "multi"
         }
       },
-      "description": "Rises steadily when the stream stops.",
+      "description": "Rises steadily when a stream stops. The phone camera is only drawn while it streams.",
       "id": 5
     },
     {
@@ -362,8 +430,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "mss_rtmp_bandwidth_in_bits",
-          "legendFormat": "bitrate"
+          "expr": "mss_rtmp_bandwidth_in_bits{channel!=\"\"}",
+          "legendFormat": "{{channel}}"
         }
       ],
       "fieldConfig": {
@@ -375,7 +443,32 @@
             "showPoints": "never"
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "stream"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Video loop"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "phone"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Phone camera"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -386,7 +479,8 @@
           "mode": "multi"
         }
       },
-      "id": 6
+      "id": 6,
+      "description": "Bitrate received by nginx-rtmp, per channel."
     },
     {
       "type": "timeseries",

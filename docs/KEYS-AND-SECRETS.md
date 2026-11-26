@@ -15,6 +15,7 @@ See also: [HOW-IT-WORKS.md](HOW-IT-WORKS.md) · [README](../README.md)
 | **Stream key** | Authorizes publishing the live stream | ❌ | `terraform.tfstate`, `ansible/inventory.yml`, root-only files on both servers |
 | **WireGuard keys** | Encrypt and authenticate the backend → frontend tunnel | ❌ | Each server's `/etc/wireguard/private.key` (root-only) |
 | **WebRTC publish password** | Lets the phone publish on the real-time channel ([WEBRTC.md](WEBRTC.md)) | ❌ | `terraform.tfstate` and the phone app. The server and `inventory.yml` only hold its **SHA-256 hash** |
+| **Phone camera keys** | The phone's own stream key and WireGuard key ([PHONE-CAMERA.md](PHONE-CAMERA.md)) | ❌ | Stream key: `terraform.tfstate`, `ansible/inventory.yml`, nginx config. WireGuard key: `ansible/phone/` on the control machine (owner-only, git-ignored) and the phone |
 | **HTTPS private key** | Encrypts viewers' connections (TLS) | ❌ | Frontend, `/etc/letsencrypt/` (root-only) |
 | **Let's Encrypt account key** | certbot's identity for issuing and renewing certificates | ❌ | Frontend, `/etc/letsencrypt/accounts/` (root-only) |
 
