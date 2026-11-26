@@ -187,7 +187,7 @@
         # The QR code leaves out the comments to stay small and easy to scan
         - name: Build mss-phone.conf and its QR code mss-phone.png
           ansible.builtin.shell: |
-            set -e
+            set -e -o pipefail
             umask 077
             cd {{ phone_dir }}
             { echo "[Interface]"; echo "PrivateKey = $(cat private.key)"; cat settings.part; } > mss-phone.conf.new
@@ -198,6 +198,8 @@
               grep -v '^#' mss-phone.conf | qrencode -t png -o mss-phone.png
               echo written
             fi
+          args:
+            executable: /bin/bash
           register: phone_conf
           changed_when: "'written' in phone_conf.stdout"
 
@@ -671,11 +673,23 @@
       register: reboot_required
 
     # Every service (nginx, WireGuard, the proxy, ffmpeg) is enabled at boot,
-    # so the platform comes back on its own; the stream resumes within a minute
-    - name: Reboot to load the updates
+    # so the platform comes back on its own; the stream resumes within a minute.
+    # The private servers are reached THROUGH the frontend, so they must reboot
+    # (and be seen coming back) while the frontend is still up; rebooting all
+    # at once cuts their SSH tunnel and leaves them UNREACHABLE.
+    - name: Reboot the private servers to load the updates
       ansible.builtin.reboot:
         reboot_timeout: 600
-      when: reboot_required.stat.exists
+      when:
+        - reboot_required.stat.exists
+        - inventory_hostname not in groups['frontend']
+
+    - name: Reboot the frontend (jump host) last
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+      when:
+        - reboot_required.stat.exists
+        - inventory_hostname in groups['frontend']
 
 # Monitoring agents. node_exporter publishes each server's metrics (CPU,
 # memory, disk, network, services, pending updates) on its PRIVATE address

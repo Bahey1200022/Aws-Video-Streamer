@@ -110,6 +110,22 @@ variable "dns_firewall" {
   }
 }
 
+variable "waf" {
+  description = <<-EOT
+    CloudFront + AWS WAF in front of the website (see waf.tf). Needs domain_name and enable_tls.
+    "count" - the WAF rules only log what they would have blocked (start here)
+    "block" - requests that match a rule are refused (403)
+    "off"   - no CloudFront: the site's name points straight at the frontend
+  EOT
+  type        = string
+  default     = "count"
+
+  validation {
+    condition     = contains(["off", "count", "block"], var.waf)
+    error_message = "waf must be \"off\", \"count\" or \"block\"."
+  }
+}
+
 variable "monitoring_instance_type" {
   description = "Instance type of the monitoring server (Prometheus + Loki + Grafana need about 1 GB of RAM)"
   type        = string

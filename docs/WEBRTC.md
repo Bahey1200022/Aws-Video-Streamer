@@ -1,6 +1,6 @@
 # Real-time phone camera (WebRTC)
 
-A phone streams **live video to the website with less than a second of delay**. The page gets a second channel, **Phone · real time**, next to the video loop.
+A phone streams **live video to the website with less than a second of delay**. The page gets a channel, **Phone · real time**, next to the video loop (and next to **Phone · WireGuard**, the RTMP/HLS phone channel of [PHONE-CAMERA.md](PHONE-CAMERA.md), when `enable_phone_camera` is on).
 
 The video loop keeps using HLS, which runs a few seconds behind but scales to any number of viewers. The phone channel uses **WebRTC**, the technology behind video calls.
 

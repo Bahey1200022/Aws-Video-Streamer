@@ -28,12 +28,18 @@ resource "aws_instance" "frontend" {
   # checkov:skip=CKV_AWS_88: the frontend is the public web server, so it needs a public IP by design
   # checkov:skip=CKV_AWS_126: detailed (1-minute) monitoring is a paid CloudWatch feature not needed for this lab
   # checkov:skip=CKV_AWS_135: t3 instances are EBS-optimized by default (Nitro); setting the flag forces a stop/start
-  ami                    = data.aws_ami.ubuntu.id
-  instance_type          = var.instance_type
-  subnet_id              = data.aws_subnet.public.id
-  vpc_security_group_ids = [aws_security_group.frontend.id]
-  key_name               = aws_key_pair.mss.key_name
-  iam_instance_profile   = data.aws_iam_instance_profile.frontend.name
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = var.instance_type
+  subnet_id     = data.aws_subnet.public.id
+  # Plus, behind CloudFront, the groups that open 443 (and 80) to CloudFront
+  # only (waf.tf)
+  vpc_security_group_ids = concat(
+    [aws_security_group.frontend.id],
+    aws_security_group.cloudfront_https[*].id,
+    aws_security_group.cloudfront_http[*].id,
+  )
+  key_name             = aws_key_pair.mss.key_name
+  iam_instance_profile = data.aws_iam_instance_profile.frontend.name
 
   associate_public_ip_address = true
 
@@ -115,13 +121,56 @@ data "aws_instance" "frontend" {
 
 locals {
   frontend_public_ip = data.aws_instance.frontend.public_ip
+
+  # CloudFront + WAF in front of the website (waf.tf, var.waf)
+  cloudfront_on = var.waf != "off" && local.dns_enabled && var.enable_tls
+
+  # The site's name. Behind CloudFront it points at CloudFront, so a second
+  # name always points straight at the frontend: CloudFront's origin, and the
+  # phone's WireGuard endpoint (UDP can't go through CloudFront)
+  frontend_fqdn = local.dns_enabled ? "${var.frontend_hostname}.${var.domain_name}" : null
+  direct_fqdn   = local.cloudfront_on ? "${var.frontend_hostname}-direct.${var.domain_name}" : local.frontend_fqdn
 }
 
 resource "aws_route53_record" "frontend" {
-  # checkov:skip=CKV2_AWS_23: false positive - the record points to the frontend's IP, read through a data source Checkov can't follow
+  # checkov:skip=CKV2_AWS_23: false positive - the record points to the frontend's IP (or to CloudFront), read through resources Checkov can't follow
   count   = local.dns_enabled ? 1 : 0
   zone_id = data.aws_route53_zone.main[0].zone_id
-  name    = "${var.frontend_hostname}.${var.domain_name}"
+  name    = local.frontend_fqdn
+  type    = "A"
+  ttl     = local.cloudfront_on ? null : 60
+  records = local.cloudfront_on ? null : [local.frontend_public_ip]
+
+  # Behind CloudFront: an alias to the distribution
+  dynamic "alias" {
+    for_each = local.cloudfront_on ? [1] : []
+    content {
+      name                   = aws_cloudfront_distribution.site[0].domain_name
+      zone_id                = aws_cloudfront_distribution.site[0].hosted_zone_id
+      evaluate_target_health = false
+    }
+  }
+}
+
+# CloudFront also answers over IPv6
+resource "aws_route53_record" "frontend_ipv6" {
+  count   = local.cloudfront_on ? 1 : 0
+  zone_id = data.aws_route53_zone.main[0].zone_id
+  name    = local.frontend_fqdn
+  type    = "AAAA"
+
+  alias {
+    name                   = aws_cloudfront_distribution.site[0].domain_name
+    zone_id                = aws_cloudfront_distribution.site[0].hosted_zone_id
+    evaluate_target_health = false
+  }
+}
+
+resource "aws_route53_record" "frontend_direct" {
+  # checkov:skip=CKV2_AWS_23: false positive - the record points to the frontend's IP, read through a data source Checkov can't follow
+  count   = local.cloudfront_on ? 1 : 0
+  zone_id = data.aws_route53_zone.main[0].zone_id
+  name    = local.direct_fqdn
   type    = "A"
   ttl     = 60
   records = [local.frontend_public_ip]

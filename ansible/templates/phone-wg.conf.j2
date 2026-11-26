@@ -10,8 +10,10 @@ MTU = 1280
 [Peer]
 PublicKey = {{ hostvars['web-frontend'].wg_public_key }}
 # A name rather than an IP when there is one: the frontend's public IP
-# changes when it is stopped and started (turn the tunnel off and on again)
-Endpoint = {{ fqdn if fqdn != '_' else hostvars['web-frontend'].ansible_host }}:{{ wg_port }}
+# changes when it is stopped and started (turn the tunnel off and on again).
+# direct_fqdn, not fqdn: behind CloudFront the site's name points at
+# CloudFront, which doesn't carry WireGuard (UDP)
+Endpoint = {{ direct_fqdn if direct_fqdn | default('_') != '_' else hostvars['web-frontend'].ansible_host }}:{{ wg_port }}
 # Only the frontend's tunnel address goes through the tunnel; the rest of
 # the phone's traffic is untouched
 AllowedIPs = {{ wg_frontend_ip }}/32

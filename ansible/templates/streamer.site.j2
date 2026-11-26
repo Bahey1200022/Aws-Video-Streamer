@@ -1,9 +1,48 @@
 # {{ ansible_managed }}
+{% if cloudfront | default(false) | bool %}
+# ---- Behind CloudFront + AWS WAF (terraform/waf.tf) ----
+# Requests arrive from CloudFront's addresses. The viewer's real address is
+# the last one in X-Forwarded-For (CloudFront appends it), trusted only when
+# the connection really comes from CloudFront. Logs then show the viewer.
+{% for cidr in cloudfront_cidrs %}
+set_real_ip_from {{ cidr }};
+{% endfor %}
+real_ip_header X-Forwarded-For;
+
+# Only our CloudFront distribution adds this secret header. Without it,
+# anyone could reach this server through a CloudFront distribution of their
+# own and skip our WAF. Requests from inside the VPC (the monitoring probes)
+# and from this server itself don't need it.
+geo $realip_remote_addr $mss_from_vpc {
+    default 0;
+    127.0.0.1 1;
+    {{ vpc_cidr }} 1;
+}
+map $http_x_origin_verify $mss_from_cloudfront {
+    default 0;
+    "{{ origin_verify_secret }}" 1;
+}
+map "$mss_from_cloudfront$mss_from_vpc" $mss_origin_denied {
+    "00" 1;
+    default 0;
+}
+
+{% endif %}
+{% macro origin_check() %}
+{% if cloudfront | default(false) | bool %}
+    # Not through our CloudFront (see the top of this file)
+    if ($mss_origin_denied) {
+        return 403;
+    }
+
+{% endif %}
+{% endmacro %}
 {% if tls_active %}
 server {
     listen 80;
     server_name {{ fqdn }};
 
+{{ origin_check() }}
     # Let's Encrypt HTTP-01 challenges (issue and renewal) stay on plain HTTP
     location ^~ /.well-known/acme-challenge/ {
         root /var/www/html;
@@ -35,6 +74,7 @@ server {
 {% endif %}
     server_name {{ fqdn }};
 
+{{ origin_check() }}
     # Player page
     root /var/www/html;
     index index.html;

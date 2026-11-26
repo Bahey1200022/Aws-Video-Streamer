@@ -4,20 +4,31 @@ resource "aws_security_group" "frontend" {
   description = "Web frontend"
   vpc_id      = data.aws_vpc.main.id
 
-  ingress {
-    description = "HTTP"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+  # Without CloudFront the website is open to everyone here. Behind
+  # CloudFront (var.waf) only CloudFront may connect: those rules are in
+  # their own groups in waf.tf, so nobody can go around the WAF
+  dynamic "ingress" {
+    for_each = local.cloudfront_on ? [] : [80, 443]
+    content {
+      description = ingress.value == 80 ? "HTTP" : "HTTPS"
+      from_port   = ingress.value
+      to_port     = ingress.value
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
   }
 
-  ingress {
-    description = "HTTPS"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+  # Behind CloudFront, the monitoring server's website probes (blackbox)
+  # still come over the private network
+  dynamic "ingress" {
+    for_each = local.cloudfront_on ? local.monitoring_sg_ids : []
+    content {
+      description     = "HTTPS probes from the monitoring server (blackbox)"
+      from_port       = 443
+      to_port         = 443
+      protocol        = "tcp"
+      security_groups = [ingress.value]
+    }
   }
 
   ingress {

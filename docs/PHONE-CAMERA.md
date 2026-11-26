@@ -1,6 +1,8 @@
 # Phone camera
 
-A phone can stream **live video** to the website, next to the video loop. The page then has two channels, **Video loop** and **Phone camera**.
+A phone can stream **live video** to the website, next to the video loop. The page shows it as the **Phone · WireGuard** channel, next to **Video loop** and, when `enable_webrtc` is on, **Phone · real time** ([WEBRTC.md](WEBRTC.md)).
+
+The two phone channels are independent: this one goes phone → WireGuard → RTMP → nginx → HLS/DASH (about 12–15 s behind, any HLS player can watch); the real-time one goes phone → WebRTC → MediaMTX (under a second). Each has its own key and its own switch (`enable_phone_camera`, `enable_webrtc`).
 
 The phone connects to the frontend **the same way the streamer does**: through an encrypted **WireGuard** tunnel, then RTMP with its own stream key.
 
@@ -66,7 +68,7 @@ You need two free apps: **WireGuard** and **Larix Broadcaster** (Android and iOS
 
 Get the phone key with `terraform output -raw phone_stream_key` (in the `terraform` folder). Keep the default encoder (H.264 + AAC): browsers can play it.
 
-**4. Stream.** With the WireGuard tunnel **on**, press the record button in Larix. On the website, click **Phone camera**. The picture appears after about 10 s, which is the time to build the first HLS chunks.
+**4. Stream.** With the WireGuard tunnel **on**, press the record button in Larix. On the website, click **Phone · WireGuard**. The picture appears after about 10 s, which is the time to build the first HLS chunks.
 
 > ⚠️ The QR code and `mss-phone.conf` contain the phone's **private key**. Anyone who has them, plus the phone stream key, can broadcast. Don't post a screenshot of the QR code.
 
@@ -123,7 +125,7 @@ Measured on the first test (4G, Larix at 720p): the loop made a 2 s chunk every 
 
 **Recommended Larix settings:** 854×480, 800 kbit/s, 30 fps, keyframe 1 s, **adaptive bitrate** on (Connections → `mss`). The upload should be at least twice the bitrate.
 
-Expected delay: about **5–7 s** on the loop, about **12–15 s** on the phone. Lower than that needs LL-HLS or WebRTC, which nginx-rtmp doesn't support.
+Expected delay: about **5–7 s** on the loop, about **12–15 s** on the phone. Lower than that needs LL-HLS or WebRTC, which nginx-rtmp doesn't support: for real time, use the **Phone · real time** channel ([WEBRTC.md](WEBRTC.md)).
 
 ## If it doesn't work
 

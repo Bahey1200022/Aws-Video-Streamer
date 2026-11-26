@@ -59,3 +59,19 @@ output "grafana_admin_password" {
 output "dns_firewall_log" {
   value = local.dns_firewall_on ? "aws logs tail /mss/dns-queries --region ${var.aws_region} --since 1h --format short --filter-pattern '{ $.firewall_rule_action = \"ALERT\" || $.firewall_rule_action = \"BLOCK\" }'" : null
 }
+
+# The CloudFront address the site's name points to (var.waf)
+output "cloudfront_domain" {
+  value = try(aws_cloudfront_distribution.site[0].domain_name, null)
+}
+
+# The name that points straight at the frontend (phone WireGuard endpoint)
+output "frontend_direct_fqdn" {
+  value = try(aws_route53_record.frontend_direct[0].fqdn, null)
+}
+
+# Requests the WAF counted or blocked, in the last hour: which rule matched
+# (terminatingRuleId / nonTerminatingMatchingRules), the client IP and the URI
+output "waf_log" {
+  value = local.cloudfront_on ? "aws logs tail aws-waf-logs-mss --region ${var.aws_region} --since 1h --format short" : null
+}

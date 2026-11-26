@@ -32,6 +32,13 @@ resource "local_file" "inventory" {
     # Monitoring server (null when enable_monitoring = false)
     monitoring_private_ip  = try(aws_instance.monitoring[0].private_ip, null)
     grafana_admin_password = local.grafana_admin_password
+    # CloudFront + WAF (waf.tf): nginx accepts only CloudFront's addresses
+    # carrying the secret header, and reads the viewer's real address from
+    # X-Forwarded-For when the request comes from one of them
+    cloudfront           = local.cloudfront_on
+    direct_fqdn          = coalesce(local.direct_fqdn, "_")
+    origin_verify_secret = try(random_password.origin_verify[0].result, "")
+    cloudfront_cidrs     = sort(try([for e in data.aws_ec2_managed_prefix_list.cloudfront[0].entries : e.cidr], []))
   })
 }
 
@@ -64,5 +71,9 @@ resource "terraform_data" "ansible" {
     aws_ec2_instance_state.monitoring,
     aws_security_group.monitoring,
     aws_route53_record.frontend,
+    # behind CloudFront, Let's Encrypt reaches the frontend through it
+    aws_route53_record.frontend_direct,
+    aws_security_group.cloudfront_https,
+    aws_security_group.cloudfront_http,
   ]
 }

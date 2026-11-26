@@ -19,6 +19,12 @@ all:
 %{ if phone_camera ~}
     phone_stream_key: ${phone_stream_key}
 %{ endif ~}
+    cloudfront: ${cloudfront}
+    direct_fqdn: ${direct_fqdn}
+%{ if cloudfront ~}
+    origin_verify_secret: ${origin_verify_secret}
+    cloudfront_cidrs: ${jsonencode(cloudfront_cidrs)}
+%{ endif ~}
 %{ if monitoring_private_ip != null ~}
     monitoring_private_ip: ${monitoring_private_ip}
     grafana_admin_password: ${grafana_admin_password}

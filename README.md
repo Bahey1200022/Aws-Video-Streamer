@@ -11,6 +11,8 @@ to browsers.
 - **Terraform** builds the AWS infrastructure.
 - **Ansible**, launched by Terraform, configures the software on both servers.
 
+**Day-to-day use** (opening Grafana, streaming from a phone in real time or over WireGuard + RTMP): [docs/ACCESS.md](docs/ACCESS.md).
+
 For a file-by-file explanation of how everything works, see [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md). Every key and secret is described in [docs/KEYS-AND-SECRETS.md](docs/KEYS-AND-SECRETS.md), the Ansible playbook play by play in [docs/PLAYBOOK.md](docs/PLAYBOOK.md), the configuration templates in [docs/TEMPLATES.md](docs/TEMPLATES.md), the fixes from a security self-audit in [docs/SECURITY-FIXES.md](docs/SECURITY-FIXES.md), how the monitoring works in [docs/MONITORING.md](docs/MONITORING.md), its full plan in [docs/MONITORING-PLAN.md](docs/MONITORING-PLAN.md), the real-time phone camera (WebRTC) in [docs/WEBRTC.md](docs/WEBRTC.md), and the phone camera over WireGuard + RTMP in [docs/PHONE-CAMERA.md](docs/PHONE-CAMERA.md).
 
 ---
